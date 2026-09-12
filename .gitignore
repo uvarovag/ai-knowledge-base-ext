@@ -1,0 +1,39 @@
+# Virtual environment
+.venv/
+env/
+venv/
+data/
+.gigachat/
+
+# Cache for tools and Python
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.uv-cache/
+
+# Secrets and certificates (DO NOT commit)
+.env
+*.pem
+*.crt
+.gigachat/*
+
+# IDE (VS Code)
+.vscode/
+
+# IDE (PyCharm / IntelliJ)
+.idea/
+*.iws
+*.iml
+*.ipr
+
+# System files
+.DS_Store
+Thumbs.db
+
+# Logs and temporary data
+.code_dump.txt
+*.log
+log/
+tmp/
