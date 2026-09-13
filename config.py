@@ -183,3 +183,33 @@ COLUMN_WIDTHS: tuple[int, ...] = (50, 90, 22, 24, 18, 14)
 EXTRA_COLUMN_WIDTH = 22
 
 HEADER_FILL_COLOR = "D9E1F2"
+
+# ----- Base deduplication by embeddings (dedupe_base_embeddings.py) --------
+
+# Embeddings model served by the same GigaChat endpoint. "EmbeddingsGigaR" is
+# the stronger one; fall back to "Embeddings" if the endpoint has no GigaR.
+GIGACHAT_EMBEDDINGS_MODEL = "EmbeddingsGigaR"
+
+# Questions per embeddings request.
+EMBEDDING_BATCH_SIZE = 50
+
+# A pair goes to the model when the cosine similarity of the question
+# embeddings reaches this value. Kept moderate: a false candidate costs one
+# model call, a missed one leaves a duplicate in the base.
+EMBEDDING_CANDIDATE_THRESHOLD = 0.80
+
+# At most this many nearest neighbours per entry are considered, so a generic
+# question does not pull half of the base into the candidate list.
+EMBEDDING_TOP_K = 8
+
+# Output budget for the merge model: a list of several causes is longer than
+# the chat default in GIGACHAT_MAX_TOKENS allows.
+BASE_MERGE_MAX_TOKENS = 4000
+
+# Word limit of a list of causes grows with the number of causes: each cause
+# may take this many words on top of the MAX_VARIANTS_ANSWER_WORDS floor.
+MAX_ANSWER_WORDS_PER_CAUSE = 150
+
+# A group with more different causes than this is left as separate entries:
+# such a list is unreadable and usually means the candidate threshold is too low.
+MAX_CAUSES_PER_ENTRY = 8

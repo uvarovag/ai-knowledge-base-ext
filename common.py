@@ -392,7 +392,12 @@ def invoke_json(
 # ----- Validation ----------------------------------------------------------
 
 NUMBER_PATTERN = re.compile(r"\d+")
-LIST_MARKER_PATTERN = re.compile(r"^\s*\d+[.)]\s*", flags=re.MULTILINE)
+# A list marker is a short number followed by "." or ")" at the start of a line
+# or right after a sentence end: answers listing several causes are written on
+# one line ("несколько. 1. Файл слишком большой. 2. Неподдерживаемый формат").
+LIST_MARKER_PATTERN = re.compile(
+    r"(?:^|(?<=[.!?:;»)])\s+)\d{1,2}[.)]\s+", flags=re.MULTILINE
+)
 
 
 def find_invented_numbers(rewritten_answer: str, source_text: str) -> list[str]:
