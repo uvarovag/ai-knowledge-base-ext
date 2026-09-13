@@ -28,6 +28,12 @@
 
 База копируется в data/backups/ до записи.
 
+Пока доступа к модели эмбеддингов нет, в config.py ставится
+EMBEDDING_BACKEND = "none": кандидаты ищутся только по триграммам вопроса с
+низким порогом TRIGRAM_ONLY_CANDIDATE_THRESHOLD. Ловит меньше и стоит больше
+вызовов модели, но всё остальное (кэш по содержимому, двухшаговое слияние)
+работает так же.
+
 Запуск:
     python dedupe_base_embeddings.py
 """
@@ -195,19 +201,24 @@ def find_embedding_candidates(matrix: np.ndarray) -> set[tuple[int, int]]:
     return pairs
 
 
-def find_candidates(entries: list[dict[str, Any]], matrix: np.ndarray) -> list[tuple[int, int]]:
+def find_candidates(
+    entries: list[dict[str, Any]], matrix: np.ndarray | None
+) -> list[tuple[int, int]]:
     """Объединить кандидатов по эмбеддингам и по триграммам вопроса.
 
     Триграммы дешёвые и иногда ловят пары с редкими терминами, которые
     эмбеддинги считают далёкими. Категории не учитываются: порог для разных
-    категорий здесь равен обычному.
+    категорий здесь равен обычному. Без эмбеддингов (matrix is None) триграммы
+    остаются единственным сигналом, и порог для них берётся заметно ниже.
     """
-    by_embedding = find_embedding_candidates(matrix)
+    by_embedding = set() if matrix is None else find_embedding_candidates(matrix)
+    trigram_threshold = (
+        config.TRIGRAM_ONLY_CANDIDATE_THRESHOLD
+        if matrix is None
+        else config.CANDIDATE_THRESHOLD
+    )
     by_trigram = matching.collect_similar_pairs(
-        entries,
-        "question",
-        config.CANDIDATE_THRESHOLD,
-        config.CANDIDATE_THRESHOLD,
+        entries, "question", trigram_threshold, trigram_threshold
     )
     logger.info(
         "Candidates: %d by embeddings, %d by trigrams, %d in total",
@@ -441,8 +452,19 @@ def run() -> None:
             if path.exists():
                 path.unlink()
 
-    logger.info("Deduplicating %d base entries by question embeddings", len(entries))
-    matrix = embed_questions(entries)
+    if config.EMBEDDING_BACKEND == "none":
+        logger.info(
+            "Deduplicating %d base entries by question trigrams only "
+            "(EMBEDDING_BACKEND = \"none\", threshold %.2f)",
+            len(entries),
+            config.TRIGRAM_ONLY_CANDIDATE_THRESHOLD,
+        )
+        matrix = None
+    else:
+        logger.info(
+            "Deduplicating %d base entries by question embeddings", len(entries)
+        )
+        matrix = embed_questions(entries)
     candidates = find_candidates(entries, matrix)
 
     llm = common.build_llm()

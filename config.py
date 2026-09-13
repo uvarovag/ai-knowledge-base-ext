@@ -186,9 +186,22 @@ HEADER_FILL_COLOR = "D9E1F2"
 
 # ----- Base deduplication by embeddings (dedupe_base_embeddings.py) --------
 
+# Where question embeddings come from:
+#   "gigachat" — the embeddings model of the GigaChat endpoint (best recall);
+#   "none"     — no embeddings at all: candidates come from question trigrams
+#                only, with the low TRIGRAM_ONLY_CANDIDATE_THRESHOLD below.
+#                Use while access to the embeddings model is not granted yet.
+EMBEDDING_BACKEND: Literal["gigachat", "none"] = "gigachat"
+
 # Embeddings model served by the same GigaChat endpoint. "EmbeddingsGigaR" is
 # the stronger one; fall back to "Embeddings" if the endpoint has no GigaR.
 GIGACHAT_EMBEDDINGS_MODEL = "EmbeddingsGigaR"
+
+# Trigram threshold used when EMBEDDING_BACKEND is "none". Much lower than
+# CANDIDATE_THRESHOLD: paraphrased duplicates share few letters, and without
+# embeddings this is the only signal. Expect several thousand model calls on
+# a base of a few hundred entries; a missed pair is a duplicate kept forever.
+TRIGRAM_ONLY_CANDIDATE_THRESHOLD = 0.20
 
 # Questions per embeddings request.
 EMBEDDING_BATCH_SIZE = 50
