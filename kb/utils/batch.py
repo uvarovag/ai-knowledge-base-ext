@@ -64,11 +64,13 @@ def process_rows(
     accepted_path: Path,
     rejected_path: Path,
     label: str,
+    max_tokens: int = config.GIGACHAT_MAX_TOKENS,
 ) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
     """Run the worker over every row not processed yet; return entries and rejections.
 
-    The worker gets a shared chat client and one row. Results are saved every
-    config.SAVE_EVERY rows and at the end, sorted by source row.
+    The worker gets a shared chat client, with max_tokens of output, and one
+    row. Results are saved every config.SAVE_EVERY rows and at the end, sorted
+    by source row.
     """
     if config.FORCE_REPROCESS:
         entries: list[dict[str, Any]] = []
@@ -97,7 +99,7 @@ def process_rows(
 
     private_data_seen = 0
     if pending:
-        llm = gigachat.build_llm()
+        llm = gigachat.build_llm(max_tokens=max_tokens)
         bar = ProgressBar(len(pending), label)
         completed = 0
         # Only the workers run in parallel; every result is folded in here, on

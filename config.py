@@ -220,6 +220,17 @@ REPAIR_ANSWER_COLUMNS: tuple[str, ...] = ("Ответ",)
 # Columns copied from the input into every entry, for traceability.
 REPAIR_EXTRA_COLUMNS: tuple[str, ...] = ()
 
+# Attempts of the repair call, above MAX_RETRIES: a failed call drops a row of
+# the base, while a retry only costs one more call.
+REPAIR_MAX_RETRIES = 5
+
+# A base holds long regulatory answers that a repair can shorten only so far,
+# so its answers get a higher ceiling than MAX_ANSWER_WORDS, and the model a
+# larger output budget than GIGACHAT_MAX_TOKENS to write them: a reply cut off
+# by the budget is a broken function call, retried and finally lost.
+REPAIR_MAX_ANSWER_WORDS = 500
+REPAIR_MAX_TOKENS = 4000
+
 # The repaired base and the rows left out of it, with the reason. The living
 # base of scenario 1 is never touched.
 REPAIRED_BASE_DIR = DATA_DIR / "repaired"

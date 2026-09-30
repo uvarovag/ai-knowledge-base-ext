@@ -203,6 +203,8 @@ MERGE_SYSTEM_PROMPT_TEMPLATE = """Ты — редактор базы знани�
 Не сокращай и не выбрасывай детали. Вместо этого возьми ответ самой полной
 записи и верни его без изменений. Полнота важнее длины.
 
+<<WRITING_STYLE>>
+
 ЗАПРЕЩЕНО
 - Добавлять факты, шаги, условия, сроки, лимиты и числа, которых нет ни в одной
   из исходных записей.
@@ -261,6 +263,8 @@ MERGE_VARIANTS_SYSTEM_PROMPT_TEMPLATE = """Ты — редактор базы з
 Не выбрасывай пункты и не сокращай их до неузнаваемости. Оставь все пункты,
 убрав только повторы между ними. Полнота важнее длины.
 
+<<WRITING_STYLE>>
+
 ЗАПРЕЩЕНО
 - Придумывать причины и условия, которых нет ни в одной записи.
 - Объединять две записи в один пункт.
@@ -302,6 +306,7 @@ MERGE_SYSTEM_PROMPT = prompts.render_prompt(
     category_names=prompts.format_category_names(),
     question_words=config.QUESTION_WORDS_TARGET,
     answer_words=config.ANSWER_WORDS_TARGET,
+    writing_style=prompts.WRITING_STYLE,
 )
 
 MERGE_VARIANTS_SYSTEM_PROMPT = prompts.render_prompt(
@@ -310,6 +315,7 @@ MERGE_VARIANTS_SYSTEM_PROMPT = prompts.render_prompt(
     category_names=prompts.format_category_names(),
     question_words=config.QUESTION_WORDS_TARGET,
     answer_words=config.VARIANTS_ANSWER_WORDS_TARGET,
+    writing_style=prompts.WRITING_STYLE,
 )
 
 # ----- Verdict cache -------------------------------------------------------

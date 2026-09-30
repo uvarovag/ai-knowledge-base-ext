@@ -76,6 +76,8 @@ TRANSFORM_SYSTEM_PROMPT_TEMPLATE = """Ты — редактор базы зна�
    не к одному пользователю.
 9. Не более <<ANSWER_WORDS>> слов.
 
+<<WRITING_STYLE>>
+
 ЗАПРЕЩЕНО
 - Оставлять в вопросе или ответе ФИО, телефон, почту, логин конкретной
   учётной записи, номер заявки, договора, допсоглашения, УПД, акта, счёта,
@@ -159,6 +161,7 @@ TRANSFORM_SYSTEM_PROMPT = prompts.render_prompt(
     categories=prompts.format_categories(),
     question_words=config.QUESTION_WORDS_TARGET,
     answer_words=config.ANSWER_WORDS_TARGET,
+    writing_style=prompts.WRITING_STYLE,
 )
 
 # ----- Rewriting -----------------------------------------------------------

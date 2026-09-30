@@ -43,7 +43,7 @@ def repair_entry(llm: Any, pair: SourcePair, source_file: str) -> batch.Outcome:
         return batch.Outcome(reason=f"incomplete: {repaired['reason']}")
 
     validation_error = entries.validate_entry(
-        repaired, pair.question + "\n" + pair.answer
+        repaired, pair.question + "\n" + pair.answer, config.REPAIR_MAX_ANSWER_WORDS
     )
     if validation_error:
         return batch.Outcome(reason=validation_error)
@@ -78,6 +78,7 @@ def main() -> None:
         staging_dir / "repaired.json",
         staging_dir / "rejected.json",
         f"Repair {path.name}",
+        max_tokens=config.REPAIR_MAX_TOKENS,
     )
 
     cache_path = staging_dir / "verdicts.json"

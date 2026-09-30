@@ -71,7 +71,9 @@ words: `HtmlParser`, `parse_html`, never `HTMLParser`. Settings in `config.py` a
 the model reads (`CATEGORIES` descriptions, `DOMAIN_NAME`, docstrings and field descriptions of
 the structured output schemas), and `README.md`, which is for people. Every prompt opens with the
 model's role («Ты — сортировщик …», «Ты — редактор …») and carries few-shot examples, taken from
-real tickets where possible.
+real tickets where possible. Every prompt that writes a question or an answer of the base includes
+the one shared style block `prompts.WRITING_STYLE` (Ilyakhov's «Пиши, сокращай») through the
+`<<WRITING_STYLE>>` placeholder — change the style there, never per prompt.
 
 ### Comments and docstrings
 
@@ -143,9 +145,14 @@ without embeddings the trigram threshold drops to `TRIGRAM_ONLY_CANDIDATE_THRESH
 Reads `config.REPAIR_INPUT_PATH` by `REPAIR_QUESTION_COLUMNS` / `REPAIR_ANSWER_COLUMNS` (the
 defaults read a `knowledge_base.xlsx` this project wrote). There is **no** "belongs in a base" or
 "one-off answer" check — somebody already put the entry there. Per row, `repairing` makes one LLM
-call that only judges completeness: a vague question is rebuilt from the answer, a partial answer
-completed from the question, both brought to the canonical format; what cannot be made whole is
-left out with the model's reason. A row without an answer is left out without a call. Then
+call that repairs rather than rejects: the answer holds the knowledge, so a vague question, a bare
+request or a question the answer does not quite answer is rewritten to fit the answer, a partial
+answer is completed from the question, both are brought to the canonical format — keeping the
+names and contacts of people in charge, unlike scenario 1. Only a row whose
+answer holds nothing to keep (empty, cut off, a reply from the conversation, an answer that
+explains nothing) is left out, with the model's reason. Long regulatory answers get their own
+ceiling (`REPAIR_MAX_ANSWER_WORDS`) and output budget (`REPAIR_MAX_TOKENS`), and the repair call
+more attempts (`REPAIR_MAX_RETRIES`) than the default `MAX_RETRIES`: a failed call loses a row. A row without an answer is left out without a call. Then
 `dedup.collapse_duplicates` over the whole result, candidates as in scenario 1. Outputs:
 `REPAIRED_BASE_JSON` / `_XLSX` and `REPAIR_REJECTED_XLSX` (source row, reason, question,
 answer). The living base of scenario 1 is never touched.
