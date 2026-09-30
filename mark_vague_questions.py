@@ -147,7 +147,9 @@ def judge_questions(questions: dict[int, str]) -> dict[int, bool]:
     """Return row number -> whether its question is clear; failed rows are left out.
 
     Verdicts are cached by question text, so identical questions are asked
-    about once and a rerun only pays for the questions support changed.
+    about once and a rerun only pays for the questions support changed. The
+    prompt is part of the key: editing its rules or examples invalidates the
+    verdicts it produced instead of silently reusing them.
     """
     if config.FORCE_REPROCESS and config.VAGUE_QUESTIONS_CACHE.exists():
         config.VAGUE_QUESTIONS_CACHE.unlink()
@@ -162,7 +164,10 @@ def judge_questions(questions: dict[int, str]) -> dict[int, bool]:
             [{"key": key, "clear": clear} for key, clear in sorted(cache.items())],
         )
 
-    keys = {row: common.hash_text(question) for row, question in questions.items()}
+    keys = {
+        row: common.hash_text(SYSTEM_PROMPT + "\n" + question)
+        for row, question in questions.items()
+    }
     pending = {
         keys[row]: (row, question)
         for row, question in questions.items()

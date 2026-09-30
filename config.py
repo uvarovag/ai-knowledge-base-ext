@@ -211,8 +211,8 @@ MERGE_STRATEGY: Literal["accumulate", "replace"] = "accumulate"
 # rewrites those questions in the dump itself.
 VAGUE_QUESTION_FILL_COLOR = "FFFF00"
 
-# Verdicts keyed by the question text, so a rerun after support has edited
-# the dump only asks about the questions that changed.
+# Verdicts keyed by the question text and the prompt, so a rerun after support
+# has edited the dump only asks about the questions that changed.
 VAGUE_QUESTIONS_CACHE = STAGING_DIR / "vague_questions.json"
 
 # ----- Excel export --------------------------------------------------------
