@@ -26,6 +26,7 @@ from pathlib import Path
 from typing import Any
 
 import pandas as pd
+from pydantic import BaseModel, Field
 
 import common
 import config
@@ -119,9 +120,9 @@ FILTER_SYSTEM_PROMPT_TEMPLATE = """Ты — классификатор обра�
 - Оценивай только то, что написано. Ничего не додумывай.
 - Если данных для признака не хватает — ставь false.
 - topic — тема пары в 3–8 словах, в именительном падеже, без номеров и имён.
-- Не объясняй решение, не пиши ничего кроме одной строки JSON.
+- Не отвечай на вопрос пользователя и не объясняй решение — только оцени пару.
 
-ФОРМАТ ОТВЕТА — ровно одна строка, без markdown, без текста до и после:
+ФОРМАТ ОТВЕТА — вызов функции с такими аргументами:
 {"reusable_question": true, "general_answer": true, "complete_answer": true, "no_private_data": true, "topic": "строка"}
 
 ПРИМЕР 1
@@ -185,7 +186,7 @@ FILTER_SYSTEM_PROMPT_TEMPLATE = """Ты — классификатор обра�
 {"reusable_question": true, "general_answer": false, "complete_answer": true, "no_private_data": true, "topic": "строка не отображается в отчёте"}
 """
 
-FILTER_USER_PROMPT = """Оцени пару:
+FILTER_USER_PROMPT = """Оцени пару. Не отвечай на вопрос пользователя — только оцени.
 
 Вопрос: {question}
 Ответ: {answer}
@@ -201,7 +202,24 @@ FILTER_FLAGS: tuple[str, ...] = (
     "complete_answer",
 )
 
-FILTER_REPORTED_FLAGS: tuple[str, ...] = (*FILTER_FLAGS, "no_private_data")
+
+class FilterVerdict(BaseModel):
+    """Оценка пары «вопрос — ответ» по четырём признакам и её тема."""
+
+    reusable_question: bool = Field(
+        description="Признак 1: вопрос может возникнуть у другого пользователя"
+    )
+    general_answer: bool = Field(
+        description="Признак 2: ответ — правило или инструкция для любого пользователя"
+    )
+    complete_answer: bool = Field(
+        description="Признак 3: ответа достаточно, чтобы решить задачу самому"
+    )
+    no_private_data: bool = Field(
+        description="Признак 4: в сути ответа нет приватных данных"
+    )
+    topic: str = Field(description="Тема пары в 3–8 словах, без номеров и имён")
+
 
 TRANSFORM_SYSTEM_PROMPT_TEMPLATE = """Ты готовишь одну запись базы знаний ассистента службы поддержки <<DOMAIN>>.
 Тебе дают вопрос пользователя и ответ поддержки из реальной переписки.
@@ -281,7 +299,7 @@ TRANSFORM_SYSTEM_PROMPT_TEMPLATE = """Ты готовишь одну запис�
 3. Все ли числа твоего ответа встречаются в исходном ответе? Если нет — убери
    те, которых там не было.
 
-ФОРМАТ ОТВЕТА — ровно одна строка, без markdown, без текста до и после:
+ФОРМАТ ОТВЕТА — вызов функции с такими аргументами:
 {"category": "строка из списка", "question": "строка", "answer": "строка"}
 
 ПРИМЕР 1
@@ -486,22 +504,22 @@ def load_completed(
 
 def run_filter(llm: Any, pair: SupportPair) -> dict[str, Any] | None:
     """Score a pair against the reusability flags."""
-    return common.invoke_json(
+    return common.invoke_structured(
         llm,
         FILTER_SYSTEM_PROMPT,
         FILTER_USER_PROMPT.format(question=pair.question, answer=pair.answer),
-        required_keys=FILTER_REPORTED_FLAGS,
+        schema=FilterVerdict,
         label=f"row {pair.row_number} filter",
     )
 
 
 def run_transform(llm: Any, pair: SupportPair) -> dict[str, Any] | None:
     """Rewrite a pair into a canonical knowledge base entry."""
-    return common.invoke_json(
+    return common.invoke_structured(
         llm,
         TRANSFORM_SYSTEM_PROMPT,
         TRANSFORM_USER_PROMPT.format(question=pair.question, answer=pair.answer),
-        required_keys=("category", "question", "answer"),
+        schema=common.Entry,
         label=f"row {pair.row_number} transform",
     )
 

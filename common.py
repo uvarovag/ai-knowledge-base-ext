@@ -13,11 +13,12 @@ import sys
 import time
 from datetime import datetime
 from pathlib import Path
-from typing import Any, ClassVar
+from typing import Any, ClassVar, Literal
 from urllib.parse import urlparse
 
 from langchain_gigachat.chat_models import GigaChat
 from langchain_gigachat.embeddings import GigaChatEmbeddings
+from pydantic import BaseModel, Field
 
 import config
 
@@ -349,7 +350,7 @@ def build_embedder() -> GigaChatEmbeddings:
 
 
 def embed_texts(embedder: GigaChatEmbeddings, texts: list[str]) -> list[list[float]]:
-    """Embed one batch of texts, retrying like invoke_json does for the chat model.
+    """Embed one batch of texts, retrying like invoke_structured does for the chat model.
 
     Raises:
         RuntimeError: if every attempt fails. Unlike a failed chat call, which
@@ -379,60 +380,47 @@ def embed_texts(embedder: GigaChatEmbeddings, texts: list[str]) -> list[list[flo
     )
 
 
-FENCE_PATTERN = re.compile(r"```(?:json)?\s*(.*?)\s*```", flags=re.DOTALL)
+# Schemas the model fills through function calling: their docstrings and field
+# descriptions are sent to the model, so they are written in Russian.
 
 
-def extract_json(text: str) -> dict[str, Any]:
-    """Extract a single JSON object from the model reply.
+class Entry(BaseModel):
+    """Запись базы знаний: категория, вопрос пользователя и ответ на него."""
 
-    Raises:
-        ValueError: if no JSON object can be recovered from the text.
-    """
-    cleaned = text.strip()
-
-    fence_match = FENCE_PATTERN.search(cleaned)
-    if fence_match:
-        cleaned = fence_match.group(1).strip()
-
-    if not cleaned.startswith("{"):
-        start = cleaned.find("{")
-        end = cleaned.rfind("}")
-        if start == -1 or end <= start:
-            raise ValueError("No JSON object found in model reply")
-        cleaned = cleaned[start : end + 1]
-
-    try:
-        parsed = json.loads(cleaned)
-    except json.JSONDecodeError as error:
-        raise ValueError(f"Malformed JSON in model reply: {error}") from error
-
-    if not isinstance(parsed, dict):
-        raise ValueError("Model reply is not a JSON object")
-    return parsed
+    category: Literal[tuple(config.CATEGORIES)] = Field(
+        description="Категория — ровно одно значение из списка"
+    )
+    question: str = Field(description="Вопрос от лица пользователя")
+    answer: str = Field(description="Ответ")
 
 
-def invoke_json(
+def invoke_structured(
     llm: GigaChat,
     system_prompt: str,
     user_prompt: str,
-    required_keys: tuple[str, ...],
+    schema: type[BaseModel],
     label: str,
 ) -> dict[str, Any] | None:
-    """Call the model and return a parsed JSON object, retrying on failure.
+    """Call the model and return its answer as a dict of the schema, retrying on failure.
+
+    The model is forced to call a function whose arguments are the schema
+    (structured output, method="function_calling"), so its reply is never free
+    text to be fished for JSON: a short reply like "Хочу новый стул" used to be
+    answered in prose instead of being classified. Pydantic validates the
+    arguments; a reply that fails validation is retried like a network error.
 
     Returns None if every attempt fails. The label identifies the item in logs.
     """
+    structured_llm = llm.with_structured_output(schema, method="function_calling")
     messages = [("system", system_prompt), ("user", user_prompt)]
 
     for attempt in range(1, config.MAX_RETRIES + 1):
         wait_for_network()
         try:
-            response = llm.invoke(messages)
-            parsed = extract_json(str(response.content))
-            missing_keys = [key for key in required_keys if key not in parsed]
-            if missing_keys:
-                raise ValueError(f"Missing keys in model reply: {missing_keys}")
-            return parsed
+            result = structured_llm.invoke(messages)
+            if result is None:
+                raise ValueError("Model did not call the function")
+            return result.model_dump()
         except Exception as error:
             logger.warning(
                 "%s: attempt %d/%d failed: %s",

@@ -26,6 +26,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+from pydantic import BaseModel, Field
+
 import common
 import config
 import deduplicate
@@ -78,7 +80,7 @@ MATCH_SYSTEM_PROMPT_TEMPLATE = """Ты сопоставляешь новую з�
 Если сомневаешься между "alternatives" и "contradiction" — ставь
 "contradiction".
 
-ФОРМАТ ОТВЕТА — ровно одна строка, без markdown, без текста до и после:
+ФОРМАТ ОТВЕТА — вызов функции с такими аргументами:
 {"same_question": true, "answers_relation": "same", "reason": "до 10 слов"}
 
 ПРИМЕР 1
@@ -110,6 +112,17 @@ MATCH_SYSTEM_PROMPT = common.render_prompt(
     MATCH_SYSTEM_PROMPT_TEMPLATE, domain=config.DOMAIN_NAME
 )
 
+
+class MatchVerdict(BaseModel):
+    """Решение, отвечает ли новая запись на тот же вопрос, что и старая."""
+
+    same_question: bool = Field(description="Обе записи отвечают на один и тот же вопрос")
+    answers_relation: deduplicate.AnswersRelation = Field(
+        description="Как соотносятся ответы; при same_question = false — same"
+    )
+    reason: str = Field(description="Причина решения, до 10 слов")
+
+
 # ----- Matching ------------------------------------------------------------
 
 
@@ -135,7 +148,7 @@ def check_match(
     """
     new_index, base_index = pair
     label = f"match new {new_index} / base {base_index}"
-    verdict = common.invoke_json(
+    verdict = common.invoke_structured(
         llm,
         MATCH_SYSTEM_PROMPT,
         MATCH_USER_PROMPT.format(
@@ -144,7 +157,7 @@ def check_match(
             new_question=new_entries[new_index]["question"],
             new_answer=new_entries[new_index]["answer"],
         ),
-        required_keys=("same_question", "answers_relation"),
+        schema=MatchVerdict,
         label=label,
     )
     if verdict is None:
@@ -152,7 +165,7 @@ def check_match(
         return pair, None
     if verdict.get("same_question") is not True:
         return pair, deduplicate.VerdictCache.UNIQUE
-    return pair, deduplicate.read_relation(verdict)
+    return pair, verdict["answers_relation"]
 
 
 def judge_matches(

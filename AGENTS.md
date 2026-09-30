@@ -61,7 +61,8 @@ words: `HtmlParser`, `parse_html`, never `HTMLParser`. Settings in `config.py` a
 **English**: logs, exception messages, comments and `TODO`s, docstrings, identifiers.
 
 **Russian** (the model and the reviewers read it — don't "fix" it): every prompt and every text
-the model reads (`CATEGORIES` descriptions, `DOMAIN_NAME`), and `README.md`, which is for people.
+the model reads (`CATEGORIES` descriptions, `DOMAIN_NAME`, docstrings and field descriptions of
+the structured output schemas), and `README.md`, which is for people.
 
 ### Comments and docstrings
 
@@ -157,9 +158,11 @@ problems; `*_CROSS_CATEGORY_THRESHOLD` gates comparisons across model-assigned c
 
 Atomic JSON load/save; `ProgressBar`/`ProgressAwareHandler` (one-line bar on a tty, periodic log
 lines otherwise); `render_prompt` does literal `<<KEY>>` substitution — not `str.format`, because
-templates contain literal `{` `}` from JSON examples; `invoke_json` calls the LLM, parses a JSON
-object from the reply, retries with backoff and waits on `wait_for_network` when the GigaChat host
-drops; `build_llm(max_tokens)` / `build_embedder` / `embed_texts` are the only places that
+templates contain literal `{` `}` from JSON examples; `invoke_structured` calls the LLM with
+structured output (function calling against a Pydantic schema: `common.Entry`, and a verdict schema
+next to each prompt; docstrings and field descriptions are Russian, the model reads them), retries
+any failure — a GigaChat error, a failed validation, a reply without the function call — with
+backoff and waits on `wait_for_network` when the GigaChat host drops; `build_llm(max_tokens)` / `build_embedder` / `embed_texts` are the only places that
 construct GigaChat clients (merges pass `MERGE_MAX_TOKENS`); `hash_text` / `hash_entry` are the
 content keys of every cache; `merge_sources` / `merge_source_columns` keep provenance when tickets
 collapse into one entry.

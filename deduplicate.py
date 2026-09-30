@@ -36,7 +36,9 @@ from __future__ import annotations
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
+
+from pydantic import BaseModel, Field
 
 import common
 import config
@@ -46,7 +48,19 @@ from common import logger
 RELATION_SAME = "same"
 RELATION_ALTERNATIVES = "alternatives"
 RELATION_CONTRADICTION = "contradiction"
-RELATIONS = (RELATION_SAME, RELATION_ALTERNATIVES, RELATION_CONTRADICTION)
+# The schema enum makes the model return one of these, nothing else.
+AnswersRelation = Literal["same", "alternatives", "contradiction"]
+
+
+class DuplicateVerdict(BaseModel):
+    """Решение, отвечают ли две записи на один вопрос, и как соотносятся ответы."""
+
+    duplicate: bool = Field(description="Обе записи отвечают на один и тот же вопрос")
+    answers_relation: AnswersRelation = Field(
+        description="Как соотносятся ответы; при duplicate = false — same"
+    )
+    reason: str = Field(description="Причина решения, до 10 слов")
+
 
 # ----- Prompts -------------------------------------------------------------
 
@@ -98,7 +112,7 @@ DUPLICATE_SYSTEM_PROMPT_TEMPLATE = """Ты сравниваешь две зап�
 противоречие означает, что один из ответов устарел или ошибочен.
 Если сомневаешься между ними — ставь "contradiction".
 
-ФОРМАТ ОТВЕТА — ровно одна строка, без markdown, без текста до и после:
+ФОРМАТ ОТВЕТА — вызов функции с такими аргументами:
 {"duplicate": true, "answers_relation": "same", "reason": "до 10 слов"}
 
 ПРИМЕР 1
@@ -184,7 +198,7 @@ MERGE_SYSTEM_PROMPT_TEMPLATE = """Ты объединяешь несколько
 - Заменять или округлять числа.
 - Писать пояснения о том, что записи были объединены.
 
-ФОРМАТ ОТВЕТА — ровно одна строка, без markdown, без текста до и после:
+ФОРМАТ ОТВЕТА — вызов функции с такими аргументами:
 {"category": "строка из списка", "question": "строка", "answer": "строка"}
 
 ПРИМЕР
@@ -231,7 +245,7 @@ MERGE_VARIANTS_SYSTEM_PROMPT_TEMPLATE = """Ты объединяешь неск�
 - Добавлять факты, условия, сроки, лимиты и числа, которых нет в исходных записях.
 - Заменять или округлять числа.
 
-ФОРМАТ ОТВЕТА — ровно одна строка, без markdown, без текста до и после:
+ФОРМАТ ОТВЕТА — вызов функции с такими аргументами:
 {"category": "строка из списка", "question": "строка", "answer": "строка"}
 
 ПРИМЕР
@@ -337,7 +351,7 @@ def check_pair(
 ) -> tuple[tuple[int, int], dict[str, Any] | None]:
     """Ask the model whether the two entries answer the same question."""
     first, second = pair
-    verdict = common.invoke_json(
+    verdict = common.invoke_structured(
         llm,
         DUPLICATE_SYSTEM_PROMPT,
         DUPLICATE_USER_PROMPT.format(
@@ -346,19 +360,10 @@ def check_pair(
             second_question=entries[second]["question"],
             second_answer=entries[second]["answer"],
         ),
-        required_keys=("duplicate", "answers_relation"),
+        schema=DuplicateVerdict,
         label=f"pair {first}/{second}",
     )
     return pair, verdict
-
-
-def read_relation(verdict: dict[str, Any]) -> str:
-    """Return the relation of a verdict, falling back to the safest value."""
-    relation = verdict.get("answers_relation")
-    if relation in RELATIONS:
-        return str(relation)
-    logger.warning("Unknown answers_relation %r, treating as contradiction", relation)
-    return RELATION_CONTRADICTION
 
 
 def judge_pairs(
@@ -426,7 +431,7 @@ def judge_pairs(
                 relation = VerdictCache.UNIQUE
                 bar.advance(unique=1)
             else:
-                relation = read_relation(verdict)
+                relation = verdict["answers_relation"]
                 if relation == RELATION_CONTRADICTION:
                     logger.warning(
                         "Pair %s: answers contradict each other, keeping both (%s)",
@@ -588,11 +593,11 @@ def merge_entries(
     With as_variants the answers are folded into a numbered list of variants;
     otherwise they are merged into a single answer.
     """
-    merged = common.invoke_json(
+    merged = common.invoke_structured(
         llm,
         MERGE_VARIANTS_SYSTEM_PROMPT if as_variants else MERGE_SYSTEM_PROMPT,
         MERGE_USER_PROMPT.format(entries=format_entries(group_entries)),
-        required_keys=("category", "question", "answer"),
+        schema=common.Entry,
         label=label,
     )
     if merged is None:
