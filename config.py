@@ -64,7 +64,7 @@ FIRST_DATA_ROW = 2
 
 # Named in every prompt so the model knows what it is reading. Keep it short
 # and put the product or department name here.
-DOMAIN_NAME = "внутренних систем компании"
+DOMAIN_NAME = "Центра снабжения и офисных сервисов"
 
 # Categories offered to the model. The key is stored in the entry, the value is
 # shown to the model as the description of that key. Replace them with the
