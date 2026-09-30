@@ -17,8 +17,11 @@ URL_PATTERN = re.compile(r"https?://[^\s«»\"<>]+")
 URL_TRAILING_PUNCTUATION = ".,;:!?)"
 
 PLACEHOLDER = "[ссылка-{number}]"
-# Tolerates the ways a model re-types a placeholder: "[ссылка 1]", "[Ссылка_1]".
-PLACEHOLDER_PATTERN = re.compile(r"\[\s*ссылка[\s_-]*(\d+)\s*\]", flags=re.IGNORECASE)
+# Tolerates the ways a model re-types a placeholder: "[ссылка 1]", "[Ссылка_1]",
+# and declines it to fit the sentence: "по [ссылке-1]", "перейдите по [ссылку-1]".
+PLACEHOLDER_PATTERN = re.compile(
+    r"\[\s*ссылк[а-яё]*[\s_-]*(\d+)\s*\]", flags=re.IGNORECASE
+)
 
 # Fields of a model reply that hold text with placeholders.
 TEXT_FIELDS: tuple[str, ...] = ("question", "answer")
