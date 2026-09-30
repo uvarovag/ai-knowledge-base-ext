@@ -1,6 +1,6 @@
 #!/bin/bash
 # Usage: source activate.sh
-# After this you can run python pipeline.py, uv pip install, etc. directly.
+# After this you can run python -m kb.scenarios.tickets_to_base, uv pip install, etc. directly.
 # Exports the same variables as SETUP_ENV in the Makefile; keep the two in step.
 
 if [ ! -f .venv/bin/activate ]; then

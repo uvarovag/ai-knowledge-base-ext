@@ -47,7 +47,7 @@ COLUMN_SEPARATOR = "\n"
 # Columns copied verbatim from the dump into every entry, for traceability.
 # When several tickets collapse into one entry, their values are listed
 # comma-separated in the same order as source_rows. Names must match the dump
-# headers exactly — run inspect_dump.py to check them. A column missing from a
+# headers exactly — run make inspect to check them. A column missing from a
 # dump is skipped with a warning, not an error.
 SOURCE_EXTRA_COLUMNS: tuple[str, ...] = (
     "Обозначение ВидДокум",
@@ -208,15 +208,24 @@ MAX_CAUSES_PER_ENTRY = 8
 # other, are always replaced by the fresh one under either strategy.
 MERGE_STRATEGY: Literal["accumulate", "replace"] = "accumulate"
 
-# ----- Vague questions (mark_vague_questions.py) ---------------------------
+# ----- Repairing a base (scenario 2, make repair-base) ---------------------
 
-# Fill of a question cell whose point the model could not make out; support
-# rewrites those questions in the dump itself.
-VAGUE_QUESTION_FILL_COLOR = "FFFF00"
+# The poor base to repair: an Excel sheet whose first sheet holds a question
+# and an answer per row. The defaults read a knowledge_base.xlsx this project
+# wrote, so a base can be fed back in as is.
+REPAIR_INPUT_PATH = DATA_DIR / "base_to_repair.xlsx"
+REPAIR_QUESTION_COLUMNS: tuple[str, ...] = ("Вопрос",)
+REPAIR_ANSWER_COLUMNS: tuple[str, ...] = ("Ответ",)
 
-# Verdicts keyed by the question text and the prompt, so a rerun after support
-# has edited the dump only asks about the questions that changed.
-VAGUE_QUESTIONS_CACHE = STAGING_DIR / "vague_questions.json"
+# Columns copied from the input into every entry, for traceability.
+REPAIR_EXTRA_COLUMNS: tuple[str, ...] = ()
+
+# The repaired base and the rows left out of it, with the reason. The living
+# base of scenario 1 is never touched.
+REPAIRED_BASE_DIR = DATA_DIR / "repaired"
+REPAIRED_BASE_JSON = REPAIRED_BASE_DIR / "knowledge_base.json"
+REPAIRED_BASE_XLSX = REPAIRED_BASE_DIR / "knowledge_base.xlsx"
+REPAIR_REJECTED_XLSX = REPAIRED_BASE_DIR / "rejected.xlsx"
 
 # ----- Excel export --------------------------------------------------------
 
@@ -236,9 +245,13 @@ COLUMN_WIDTHS: tuple[int, ...] = (50, 90, 22, 24, 18, 14)
 # Width used for every column added from SOURCE_EXTRA_COLUMNS.
 EXTRA_COLUMN_WIDTH = 22
 
+# Sheet of the rows left out of a repaired base.
+REJECTED_HEADERS: tuple[str, ...] = ("Строка источника", "Причина", "Вопрос", "Ответ")
+REJECTED_COLUMN_WIDTHS: tuple[int, ...] = (16, 40, 50, 90)
+
 HEADER_FILL_COLOR = "D9E1F2"
 
-# ----- Base deduplication (dedupe_base.py) ---------------------------------
+# ----- Base deduplication (make dedupe-base) -------------------------------
 
 # Trigram threshold of the base deduplication when EMBEDDING_BACKEND is
 # "none". Much lower than CANDIDATE_THRESHOLD: paraphrased duplicates share

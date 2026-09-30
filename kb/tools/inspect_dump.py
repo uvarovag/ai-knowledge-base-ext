@@ -1,11 +1,14 @@
-"""Inspect the configured dumps and check that the models answer.
+"""Inspect the configured input files and check that the models answer.
 
-Run this when a new dump arrives: it lists every sheet and column with a
-sample, so QUESTION_COLUMNS and ANSWER_COLUMNS in config can be checked
-against the structure, then sends the first pair of the dump to the chat model
-and to the embeddings model exactly the way the pipeline does — one filter
-call and one embeddings batch — so a missing certificate or model access
-shows up here, not hours into a run.
+Run this when a new file arrives: it lists every sheet and column with a
+sample, so the question and answer columns in config can be checked against
+the structure of the dumps and of the base to repair. For a dump it then
+sends the first pair to the chat model and to the embeddings model exactly the
+way scenario 1 does — one filter call and one embeddings batch — so a missing
+certificate or model access shows up here, not hours into a run.
+
+Usage:
+    make inspect
 """
 
 from __future__ import annotations
@@ -14,9 +17,9 @@ from pathlib import Path
 
 import pandas as pd
 
-import common
 import config
-import extract
+from kb.steps import filtering
+from kb.utils import excel, gigachat, logs
 
 
 def inspect(path: Path) -> None:
@@ -51,15 +54,22 @@ def inspect(path: Path) -> None:
 def check_models(path: Path) -> None:
     """Send the first pair of the dump to the chat and embeddings models."""
     print("=== Model check ===")
-    if not common.is_network_alive():
+    if not gigachat.is_network_alive():
         print(f"  GigaChat host unreachable: {config.GIGACHAT_BASE_URL}")
         print()
         return
 
-    pair = extract.load_pairs(path)[0]
+    pairs = excel.read_pairs(
+        path, config.QUESTION_COLUMNS, config.ANSWER_COLUMNS, config.SOURCE_EXTRA_COLUMNS
+    )
+    pair = next((pair for pair in pairs if pair.question and pair.answer), None)
+    if pair is None:
+        print("  No row with both a question and an answer to send")
+        print()
+        return
     print(f"  Row {pair.row_number}: {pair.question[:77]!r}")
 
-    verdict = extract.run_filter(common.build_llm(), pair)
+    verdict = filtering.run_filter(gigachat.build_llm(), pair)
     if verdict is None:
         print(f"  Chat model {config.GIGACHAT_MODEL_NAME}: FAILED, see warnings above")
     else:
@@ -69,7 +79,7 @@ def check_models(path: Path) -> None:
         print('  Embeddings: skipped, EMBEDDING_BACKEND = "none"')
     else:
         try:
-            vectors = common.embed_texts(common.build_embedder(), [pair.question])
+            vectors = gigachat.embed_texts(gigachat.build_embedder(), [pair.question])
         except RuntimeError as error:
             print(f"  Embeddings {config.GIGACHAT_EMBEDDINGS_MODEL}: FAILED, {error}")
         else:
@@ -81,7 +91,9 @@ def check_models(path: Path) -> None:
 
 
 if __name__ == "__main__":
-    common.configure_logging()
+    logs.configure_logging()
     for dump_path in config.DUMP_PATHS:
         inspect(dump_path)
         check_models(dump_path)
+    if config.REPAIR_INPUT_PATH.exists():
+        inspect(config.REPAIR_INPUT_PATH)

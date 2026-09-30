@@ -1,9 +1,9 @@
-"""Deduplicate the entries already sitting in the living base.
+"""Scenario 1 maintenance: deduplicate the entries already in the living base.
 
 The pipeline compares a new batch with itself and with the base, but never the
 base with itself, so duplicates that slipped past the matching of earlier runs
 stay until this script is run by hand. It runs the same model-adjudicated
-grouping and two-step merge as deduplicate.py, over the whole base.
+grouping and two-step merge as dedup.py, over the whole base.
 
 Candidates come from question embeddings and question trigrams; the category
 is ignored (the model assigns it, and one question easily lands in two). With
@@ -21,25 +21,23 @@ Usage:
 
 from __future__ import annotations
 
-import common
 import config
-import deduplicate
-import export
-import matching
-from common import logger
+from kb.steps import dedup, matching
+from kb.utils import excel, logs, storage
+from kb.utils.logs import logger
 
 STAGING_DIR = config.STAGING_DIR / "base_dedupe"
 
 
-def run() -> None:
-    common.configure_logging()
+def main() -> None:
+    logs.configure_logging()
 
-    entries = common.load_json(config.KNOWLEDGE_BASE_JSON)
+    entries = storage.load_json(config.KNOWLEDGE_BASE_JSON)
     if not entries:
         logger.info("Base is empty, nothing to deduplicate")
         return
 
-    backup_path = common.backup_file(config.KNOWLEDGE_BASE_JSON)
+    backup_path = storage.backup_file(config.KNOWLEDGE_BASE_JSON)
     logger.info("Backed up base to %s", backup_path)
 
     cache_path = STAGING_DIR / "verdicts.json"
@@ -67,12 +65,14 @@ def run() -> None:
         len(candidates),
     )
 
-    result = deduplicate.collapse_duplicates(
-        entries, candidates, deduplicate.VerdictCache(cache_path, entries), "Base dedup"
+    result = dedup.collapse_duplicates(
+        entries, candidates, dedup.VerdictCache(cache_path, entries), "Base dedup"
     )
-    common.save_json(config.KNOWLEDGE_BASE_JSON, result)
-    export.run()
+    storage.save_json(config.KNOWLEDGE_BASE_JSON, result)
+    excel.write_knowledge_base(
+        result, config.KNOWLEDGE_BASE_XLSX, config.SOURCE_EXTRA_COLUMNS
+    )
 
 
 if __name__ == "__main__":
-    run()
+    main()

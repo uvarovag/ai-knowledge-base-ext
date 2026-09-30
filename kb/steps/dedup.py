@@ -1,7 +1,6 @@
-"""Collapse duplicates inside one extracted batch.
+"""Collapse duplicates inside one list of entries.
 
-1. Candidates: local trigram similarity of questions and of answers, no model
-   calls.
+1. Candidates: found by the matching step and passed in, no model calls.
 2. Adjudication: one model call per candidate pair. Besides deciding whether
    the two entries answer the same question, the model classifies how their
    answers relate: same, alternatives or contradiction. Verdicts are cached on
@@ -26,9 +25,9 @@ wrong, and folding them into a list would hand the user a stale instruction
 as a working one. Such pairs are logged.
 
 Verdicts are cached by the content of the two entries, not by their positions,
-so a cache survives the list changing underneath it. dedupe_base.py runs the
-same flow (collapse_duplicates) over the living base, and merge.py uses the
-merge helpers when it folds a fresh entry into an existing one.
+so a cache survives the list changing underneath it. Every scenario runs this
+flow through collapse_duplicates, and the merging step uses the merge helpers
+when it folds a fresh entry into an existing one of the base.
 """
 
 from __future__ import annotations
@@ -40,10 +39,10 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, Field
 
-import common
 import config
-import matching
-from common import logger
+from kb.utils import gigachat, logs, prompts, storage
+from kb.utils.entries import Entry, merge_sources, merged_entry, validate_entry
+from kb.utils.logs import logger
 
 RELATION_SAME = "same"
 RELATION_ALTERNATIVES = "alternatives"
@@ -293,22 +292,22 @@ MERGE_USER_PROMPT = """Объедини эти записи в одну:
 {entries}
 """
 
-DUPLICATE_SYSTEM_PROMPT = common.render_prompt(
+DUPLICATE_SYSTEM_PROMPT = prompts.render_prompt(
     DUPLICATE_SYSTEM_PROMPT_TEMPLATE, domain=config.DOMAIN_NAME
 )
 
-MERGE_SYSTEM_PROMPT = common.render_prompt(
+MERGE_SYSTEM_PROMPT = prompts.render_prompt(
     MERGE_SYSTEM_PROMPT_TEMPLATE,
     domain=config.DOMAIN_NAME,
-    category_names=common.format_category_names(),
+    category_names=prompts.format_category_names(),
     question_words=config.QUESTION_WORDS_TARGET,
     answer_words=config.ANSWER_WORDS_TARGET,
 )
 
-MERGE_VARIANTS_SYSTEM_PROMPT = common.render_prompt(
+MERGE_VARIANTS_SYSTEM_PROMPT = prompts.render_prompt(
     MERGE_VARIANTS_SYSTEM_PROMPT_TEMPLATE,
     domain=config.DOMAIN_NAME,
-    category_names=common.format_category_names(),
+    category_names=prompts.format_category_names(),
     question_words=config.QUESTION_WORDS_TARGET,
     answer_words=config.VARIANTS_ANSWER_WORDS_TARGET,
 )
@@ -338,15 +337,15 @@ class VerdictCache:
         other_entries: list[dict[str, Any]] | None = None,
     ) -> None:
         self.path = path
-        self.hashes = [common.hash_entry(entry) for entry in entries]
+        self.hashes = [storage.hash_entry(entry) for entry in entries]
         self.other_hashes = (
             self.hashes
             if other_entries is None
-            else [common.hash_entry(entry) for entry in other_entries]
+            else [storage.hash_entry(entry) for entry in other_entries]
         )
         self.verdicts: dict[tuple[str, str], str] = {}
 
-        records = common.load_json(path)
+        records = storage.load_json(path)
         if records and "key" not in records[0]:
             logger.warning("%s: verdict cache in an old format, starting over", path)
             records = []
@@ -368,7 +367,7 @@ class VerdictCache:
 
     def save(self) -> None:
         """Write the cache so an interrupted run can pick up here."""
-        common.save_json(
+        storage.save_json(
             self.path,
             [
                 {"key": list(key), "relation": relation}
@@ -385,7 +384,7 @@ def check_pair(
 ) -> tuple[tuple[int, int], dict[str, Any] | None]:
     """Ask the model whether the two entries answer the same question."""
     first, second = pair
-    verdict = common.invoke_structured(
+    verdict = gigachat.invoke_structured(
         llm,
         DUPLICATE_SYSTEM_PROMPT,
         DUPLICATE_USER_PROMPT.format(
@@ -448,7 +447,7 @@ def judge_pairs(
         return relations, alternatives_count, contradiction_count
 
     completed = 0
-    bar = common.ProgressBar(len(pending), label)
+    bar = logs.ProgressBar(len(pending), label)
 
     # Only the workers run in parallel; every result is folded in here, on the
     # main thread, so the cache needs no lock.
@@ -602,7 +601,7 @@ def validate_merged(
     else:
         answer_limit = config.MAX_ANSWER_WORDS
 
-    rejection_reason = common.validate_entry(merged, source_text, answer_limit)
+    rejection_reason = validate_entry(merged, source_text, answer_limit)
     if rejection_reason is not None:
         return rejection_reason
 
@@ -627,11 +626,11 @@ def merge_entries(
     With as_variants the answers are folded into a numbered list of variants;
     otherwise they are merged into a single answer.
     """
-    merged = common.invoke_structured(
+    merged = gigachat.invoke_structured(
         llm,
         MERGE_VARIANTS_SYSTEM_PROMPT if as_variants else MERGE_SYSTEM_PROMPT,
         MERGE_USER_PROMPT.format(entries=format_entries(group_entries)),
-        schema=common.Entry,
+        schema=Entry,
         label=label,
     )
     if merged is None:
@@ -644,20 +643,6 @@ def merge_entries(
         return None
 
     return merged
-
-
-def finalize(merged: dict[str, Any], group_entries: list[dict[str, Any]]) -> dict[str, Any]:
-    """Build the result entry, carrying the provenance of every source entry."""
-    source_file, source_rows = common.merge_sources(group_entries)
-    return {
-        "category": merged["category"],
-        "question": merged["question"],
-        "answer": merged["answer"],
-        "source_file": source_file,
-        "source_rows": source_rows,
-        "source_columns": common.merge_source_columns(group_entries),
-        "updated_at": common.today(),
-    }
 
 
 def split_same_clusters(
@@ -725,7 +710,7 @@ def merge_group(
     fails the most detailed entry of the cluster stands in.
     """
     clusters = split_same_clusters(group, relations)
-    _, rows = common.merge_sources([entries[index] for index in group.members])
+    _, rows = merge_sources([entries[index] for index in group.members])
     label = f"merge rows {rows}"
 
     collapsed: list[tuple[dict[str, Any], list[dict[str, Any]]]] = []
@@ -736,7 +721,7 @@ def merge_group(
 
     if len(collapsed) == 1:
         merged, cluster_entries = collapsed[0]
-        return [finalize(merged, cluster_entries)]
+        return [merged_entry(merged, cluster_entries)]
 
     if len(collapsed) > config.MAX_CAUSES_PER_ENTRY:
         logger.warning(
@@ -746,7 +731,7 @@ def merge_group(
             len(collapsed),
             config.MAX_CAUSES_PER_ENTRY,
         )
-        return [finalize(merged, cluster_entries) for merged, cluster_entries in collapsed]
+        return [merged_entry(merged, cluster_entries) for merged, cluster_entries in collapsed]
 
     variants = merge_entries(
         llm,
@@ -760,9 +745,9 @@ def merge_group(
             rows,
             len(collapsed),
         )
-        return [finalize(merged, cluster_entries) for merged, cluster_entries in collapsed]
+        return [merged_entry(merged, cluster_entries) for merged, cluster_entries in collapsed]
 
-    return [finalize(variants, [entries[index] for index in group.members])]
+    return [merged_entry(variants, [entries[index] for index in group.members])]
 
 
 # ----- Collapsing a list ---------------------------------------------------
@@ -785,7 +770,7 @@ def collapse_duplicates(
     contradiction_count = 0
 
     if candidates:
-        llm = common.build_llm()
+        llm = gigachat.build_llm()
         relations, alternatives_count, contradiction_count = judge_pairs(
             llm, entries, candidates, cache, f"{label}: comparing pairs"
         )
@@ -817,8 +802,8 @@ def collapse_duplicates(
 
     merged_by_group: dict[int, list[dict[str, Any]]] = {}
     if duplicate_groups:
-        merge_llm = common.build_llm(max_tokens=config.MERGE_MAX_TOKENS)
-        bar = common.ProgressBar(len(duplicate_groups), f"{label}: merging groups")
+        merge_llm = gigachat.build_llm(max_tokens=config.MERGE_MAX_TOKENS)
+        bar = logs.ProgressBar(len(duplicate_groups), f"{label}: merging groups")
         with ThreadPoolExecutor(max_workers=config.WORKER_COUNT) as executor:
             futures = {
                 executor.submit(
@@ -841,36 +826,3 @@ def collapse_duplicates(
 
     logger.info("Collapsed %d entries into %d", len(entries), len(result))
     return result
-
-
-# ----- Entry point ---------------------------------------------------------
-
-
-def run(extracted_path: Path, staging_dir: Path) -> Path:
-    """Collapse duplicates inside one batch. Returns the path of the result."""
-    entries = common.load_json(extracted_path)
-    deduped_path = staging_dir / "deduped.json"
-    cache_path = staging_dir / "verdicts.json"
-
-    if not entries:
-        common.save_json(deduped_path, [])
-        return deduped_path
-
-    if config.FORCE_REPROCESS and cache_path.exists():
-        cache_path.unlink()
-
-    logger.info("Deduplicating %d extracted entries", len(entries))
-    candidates = matching.find_candidate_pairs(entries)
-    result = collapse_duplicates(
-        entries, candidates, VerdictCache(cache_path, entries), "Dedup"
-    )
-
-    common.save_json(deduped_path, result)
-    return deduped_path
-
-
-if __name__ == "__main__":
-    common.configure_logging()
-    for path in config.DUMP_PATHS:
-        staging = common.staging_dir_for(path)
-        run(staging / "extracted.json", staging)

@@ -23,7 +23,7 @@ endef
 # mirror when the store lacks the root as well. Same as [tool.uv] system-certs and
 # allow-insecure-host of a pyproject.toml, which this repo has none.
 
-.PHONY: help setup run inspect mark-vague dedupe-base clean dump dump-diff
+.PHONY: help setup inspect run dedupe-base repair-base clean dump dump-diff
 
 help: ## Show this help menu
 	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) | sed 's/^.*Makefile://' | awk 'BEGIN {FS = ":.*?## "}; {printf "\033[36m%-15s\033[0m %s\n", $$1, $$2}'
@@ -33,18 +33,18 @@ setup: ## Create venv, install uv and requirements.txt
 	@$(SETUP_ENV) && pip install --upgrade pip && pip install uv && uv pip install -r requirements.txt
 	@echo "✅ Venv created, dependencies installed."
 
-inspect: ## Check the dumps against config.py and that GigaChat and embeddings answer
-	@$(SETUP_ENV) && python inspect_dump.py
-
-mark-vague: ## Fill vague questions of the dumps yellow, in place, for support to rewrite
-	@$(SETUP_ENV) && caffeinate -is python mark_vague_questions.py
+inspect: ## Check the input files against config.py and that GigaChat and embeddings answer
+	@$(SETUP_ENV) && python -m kb.tools.inspect_dump
 
 # caffeinate keeps the Mac awake for hours-long runs: network calls die when it sleeps.
-run: ## Process new dumps from config.DUMP_PATHS and rebuild the Excel export
-	@$(SETUP_ENV) && caffeinate -is python pipeline.py
+run: ## Scenario 1: grow the living base from new dumps in config.DUMP_PATHS
+	@$(SETUP_ENV) && caffeinate -is python -m kb.scenarios.tickets_to_base
 
-dedupe-base: ## Deduplicate the living base by question embeddings and trigrams
-	@$(SETUP_ENV) && caffeinate -is python dedupe_base.py
+dedupe-base: ## Scenario 1 maintenance: deduplicate the living base
+	@$(SETUP_ENV) && caffeinate -is python -m kb.scenarios.dedupe_base
+
+repair-base: ## Scenario 2: repair and deduplicate the base in config.REPAIR_INPUT_PATH
+	@$(SETUP_ENV) && caffeinate -is python -m kb.scenarios.repair_base
 
 clean: ## Remove the venv and caches (never touches data/)
 	@rm -rf .venv/ .uv-cache/ __pycache__/

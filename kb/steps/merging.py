@@ -28,11 +28,11 @@ from typing import Any
 
 from pydantic import BaseModel, Field
 
-import common
 import config
-import deduplicate
-import matching
-from common import logger
+from kb.steps import dedup, matching
+from kb.utils import gigachat, logs, prompts, storage
+from kb.utils.entries import merged_entry
+from kb.utils.logs import logger
 
 # ----- Prompt --------------------------------------------------------------
 
@@ -124,7 +124,7 @@ MATCH_USER_PROMPT = """Старая запись.
 Ответ: {new_answer}
 """
 
-MATCH_SYSTEM_PROMPT = common.render_prompt(
+MATCH_SYSTEM_PROMPT = prompts.render_prompt(
     MATCH_SYSTEM_PROMPT_TEMPLATE, domain=config.DOMAIN_NAME
 )
 
@@ -133,7 +133,7 @@ class MatchVerdict(BaseModel):
     """Решение, отвечает ли новая запись на тот же вопрос, что и старая."""
 
     same_question: bool = Field(description="Обе записи отвечают на один и тот же вопрос")
-    answers_relation: deduplicate.AnswersRelation = Field(
+    answers_relation: dedup.AnswersRelation = Field(
         description="Как соотносятся ответы; при same_question = false — same"
     )
     reason: str = Field(description="Причина решения, до 10 слов")
@@ -164,7 +164,7 @@ def check_match(
     """
     new_index, base_index = pair
     label = f"match new {new_index} / base {base_index}"
-    verdict = common.invoke_structured(
+    verdict = gigachat.invoke_structured(
         llm,
         MATCH_SYSTEM_PROMPT,
         MATCH_USER_PROMPT.format(
@@ -180,7 +180,7 @@ def check_match(
         logger.warning("%s: no verdict, treating the new entry as new", label)
         return pair, None
     if verdict.get("same_question") is not True:
-        return pair, deduplicate.VerdictCache.UNIQUE
+        return pair, dedup.VerdictCache.UNIQUE
     return pair, verdict["answers_relation"]
 
 
@@ -188,13 +188,13 @@ def judge_matches(
     new_entries: list[dict[str, Any]],
     base_entries: list[dict[str, Any]],
     candidates: list[tuple[int, int]],
-    cache: deduplicate.VerdictCache,
+    cache: dedup.VerdictCache,
 ) -> list[Match]:
     """Ask the model about every candidate pair, reusing cached verdicts."""
     confirmed: list[Match] = []
 
     def register(pair: tuple[int, int], relation: str) -> None:
-        if relation != deduplicate.VerdictCache.UNIQUE:
+        if relation != dedup.VerdictCache.UNIQUE:
             confirmed.append(Match(pair[0], pair[1], relation))
 
     pending: list[tuple[int, int]] = []
@@ -214,9 +214,9 @@ def judge_matches(
     if not pending:
         return confirmed
 
-    llm = common.build_llm()
+    llm = gigachat.build_llm()
     completed = 0
-    bar = common.ProgressBar(len(pending), "Merge: matching against base")
+    bar = logs.ProgressBar(len(pending), "Merge: matching against base")
     with ThreadPoolExecutor(max_workers=config.WORKER_COUNT) as executor:
         futures = [
             executor.submit(check_match, llm, new_entries, base_entries, pair)
@@ -229,7 +229,7 @@ def judge_matches(
                 continue
             cache.add(pair, relation)
             register(pair, relation)
-            if relation == deduplicate.VerdictCache.UNIQUE:
+            if relation == dedup.VerdictCache.UNIQUE:
                 bar.advance(new=1)
             else:
                 bar.advance(matched=1)
@@ -273,7 +273,7 @@ def should_accumulate(match: Match) -> bool:
     """Tell whether the matched entries are folded into a list of causes."""
     return (
         config.MERGE_STRATEGY == "accumulate"
-        and match.relation == deduplicate.RELATION_ALTERNATIVES
+        and match.relation == dedup.RELATION_ALTERNATIVES
     )
 
 
@@ -296,29 +296,31 @@ def build_updated_entry(
     group_entries = [base_entry, new_entry]
     label = f"accumulate base {match.base_index} / new {match.new_index}"
 
-    merged = deduplicate.merge_entries(
+    merged = dedup.merge_entries(
         llm, group_entries, as_variants=True, label=label
     )
     if merged is None:
         logger.warning("%s: keeping the fresh entry as is", label)
         return new_entry
-    return deduplicate.finalize(merged, group_entries)
+    return merged_entry(merged, group_entries)
 
 
-# ----- Entry point ---------------------------------------------------------
+# ----- Merging into the base ----------------------------------------------
 
 
-def run(deduped_path: Path, staging_dir: Path) -> tuple[int, int]:
-    """Merge one batch into the living base.
+def merge_into_base(
+    new_entries: list[dict[str, Any]], staging_dir: Path
+) -> tuple[int, int]:
+    """Merge a batch into the living base, backing it up first.
 
-    Returns the number of updated and of added entries.
+    Match verdicts are cached in staging_dir. Returns the number of updated
+    and of added entries.
     """
-    new_entries = common.load_json(deduped_path)
     if not new_entries:
-        logger.warning("Nothing to merge from %s", deduped_path)
+        logger.warning("Nothing to merge into the base")
         return 0, 0
 
-    base_entries = common.load_json(config.KNOWLEDGE_BASE_JSON)
+    base_entries = storage.load_json(config.KNOWLEDGE_BASE_JSON)
     logger.info(
         "Merging %d new entries into a base of %d, strategy: %s",
         len(new_entries),
@@ -332,7 +334,7 @@ def run(deduped_path: Path, staging_dir: Path) -> tuple[int, int]:
         cache_path = staging_dir / "match_verdicts.json"
         if config.FORCE_REPROCESS and cache_path.exists():
             cache_path.unlink()
-        cache = deduplicate.VerdictCache(cache_path, new_entries, base_entries)
+        cache = dedup.VerdictCache(cache_path, new_entries, base_entries)
         confirmed = judge_matches(new_entries, base_entries, candidates, cache)
 
     matches = select_matches(confirmed)
@@ -345,8 +347,8 @@ def run(deduped_path: Path, staging_dir: Path) -> tuple[int, int]:
 
     updated_by_base_index: dict[int, dict[str, Any]] = {}
     if matches:
-        llm = common.build_llm(max_tokens=config.MERGE_MAX_TOKENS)
-        bar = common.ProgressBar(len(matches), "Merge: updating entries")
+        llm = gigachat.build_llm(max_tokens=config.MERGE_MAX_TOKENS)
+        bar = logs.ProgressBar(len(matches), "Merge: updating entries")
         with ThreadPoolExecutor(max_workers=config.WORKER_COUNT) as executor:
             futures = {
                 executor.submit(
@@ -371,11 +373,11 @@ def run(deduped_path: Path, staging_dir: Path) -> tuple[int, int]:
     ]
     result.extend(added)
 
-    backup_path = common.backup_file(config.KNOWLEDGE_BASE_JSON)
+    backup_path = storage.backup_file(config.KNOWLEDGE_BASE_JSON)
     if backup_path:
         logger.info("Previous base backed up to %s", backup_path)
 
-    common.save_json(config.KNOWLEDGE_BASE_JSON, result)
+    storage.save_json(config.KNOWLEDGE_BASE_JSON, result)
     logger.info(
         "Base updated: %d updated, %d added, %d entries total",
         len(matches),
@@ -383,10 +385,3 @@ def run(deduped_path: Path, staging_dir: Path) -> tuple[int, int]:
         len(result),
     )
     return len(matches), len(added)
-
-
-if __name__ == "__main__":
-    common.configure_logging()
-    for path in config.DUMP_PATHS:
-        staging = common.staging_dir_for(path)
-        run(staging / "deduped.json", staging)

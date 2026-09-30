@@ -26,9 +26,9 @@ from typing import Any
 
 import numpy as np
 
-import common
 import config
-from common import logger
+from kb.utils import gigachat, logs, storage
+from kb.utils.logs import logger
 
 NON_WORD_PATTERN = re.compile(r"[^а-яёa-z0-9 ]+")
 WHITESPACE_PATTERN = re.compile(r"\s+")
@@ -161,7 +161,7 @@ def load_embedding_cache() -> dict[str, np.ndarray]:
 
 
 def save_embedding_cache(cache: dict[str, np.ndarray]) -> None:
-    """Write the embeddings cache atomically, like common.save_json."""
+    """Write the embeddings cache atomically, like storage.save_json."""
     path = config.EMBEDDINGS_CACHE
     path.parent.mkdir(parents=True, exist_ok=True)
     temporary_path = path.with_suffix(".tmp.npz")
@@ -179,7 +179,7 @@ def embed_questions(entries: list[dict[str, Any]], label: str) -> np.ndarray | N
         return None
 
     cache = load_embedding_cache()
-    hashes = [common.hash_text(entry["question"]) for entry in entries]
+    hashes = [storage.hash_text(entry["question"]) for entry in entries]
     pending = {
         key: entry["question"]
         for entry, key in zip(entries, hashes)
@@ -187,7 +187,7 @@ def embed_questions(entries: list[dict[str, Any]], label: str) -> np.ndarray | N
     }
 
     if pending:
-        embedder = common.build_embedder()
+        embedder = gigachat.build_embedder()
         keys = list(pending)
         batches = [
             keys[start : start + config.EMBEDDING_BATCH_SIZE]
@@ -200,9 +200,9 @@ def embed_questions(entries: list[dict[str, Any]], label: str) -> np.ndarray | N
             len(batches),
             len(entries) - len(keys),
         )
-        bar = common.ProgressBar(len(batches), f"{label}: embedding questions")
+        bar = logs.ProgressBar(len(batches), f"{label}: embedding questions")
         for batch in batches:
-            vectors = common.embed_texts(embedder, [pending[key] for key in batch])
+            vectors = gigachat.embed_texts(embedder, [pending[key] for key in batch])
             for key, vector in zip(batch, vectors):
                 cache[key] = np.asarray(vector, dtype=np.float32)
             save_embedding_cache(cache)
