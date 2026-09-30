@@ -205,6 +205,16 @@ MAX_CAUSES_PER_ENTRY = 8
 # other, are always replaced by the fresh one under either strategy.
 MERGE_STRATEGY: Literal["accumulate", "replace"] = "accumulate"
 
+# ----- Vague questions (mark_vague_questions.py) ---------------------------
+
+# Fill of a question cell whose point the model could not make out; support
+# rewrites those questions in the dump itself.
+VAGUE_QUESTION_FILL_COLOR = "FFFF00"
+
+# Verdicts keyed by the question text, so a rerun after support has edited
+# the dump only asks about the questions that changed.
+VAGUE_QUESTIONS_CACHE = STAGING_DIR / "vague_questions.json"
+
 # ----- Excel export --------------------------------------------------------
 
 SHEET_TITLE = "База знаний"

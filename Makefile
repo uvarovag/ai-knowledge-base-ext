@@ -23,7 +23,7 @@ endef
 # mirror when the store lacks the root as well. Same as [tool.uv] system-certs and
 # allow-insecure-host of a pyproject.toml, which this repo has none.
 
-.PHONY: help setup run inspect dedupe-base clean dump dump-diff
+.PHONY: help setup run inspect mark-vague dedupe-base clean dump dump-diff
 
 help: ## Show this help menu
 	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) | sed 's/^.*Makefile://' | awk 'BEGIN {FS = ":.*?## "}; {printf "\033[36m%-15s\033[0m %s\n", $$1, $$2}'
@@ -35,6 +35,9 @@ setup: ## Create venv, install uv and requirements.txt
 
 inspect: ## Check the dumps against config.py and that GigaChat and embeddings answer
 	@$(SETUP_ENV) && python inspect_dump.py
+
+mark-vague: ## Fill vague questions of the dumps yellow, in place, for support to rewrite
+	@$(SETUP_ENV) && caffeinate -is python mark_vague_questions.py
 
 # caffeinate keeps the Mac awake for hours-long runs: network calls die when it sleeps.
 run: ## Process new dumps from config.DUMP_PATHS and rebuild the Excel export
