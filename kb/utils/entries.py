@@ -35,18 +35,71 @@ LIST_MARKER_PATTERN = re.compile(
 )
 
 
+# Links are checked whole (find_invented_links) and left out of the number
+# check: the digits of an encoded link are not facts, and a list marker right
+# after a link would not follow a sentence end. A link is replaced by a period
+# so that such a marker still reads as one.
+URL_PATTERN = re.compile(r"https?://[^\s«»\"<>]+")
+URL_TRAILING_PUNCTUATION = ".,;:!?)"
+
+# Number words a rewrite may turn into digits ("через десять дней" → "через 10
+# дней"): the digits count as present in the source when the word is there.
+NUMBER_WORDS: dict[str, str] = {
+    "ноль": "0", "нуля": "0", "нулю": "0", "нулём": "0", "нулем": "0",
+    "один": "1", "одна": "1", "одно": "1", "одного": "1", "одной": "1",
+    "одну": "1",
+    "два": "2", "две": "2", "двух": "2", "двум": "2",
+    "три": "3", "трёх": "3", "трех": "3", "трём": "3", "трем": "3",
+    "четыре": "4", "четырёх": "4", "четырех": "4",
+    "пять": "5", "пяти": "5", "шесть": "6", "шести": "6", "семь": "7", "семи": "7",
+    "восемь": "8", "восьми": "8", "девять": "9", "девяти": "9",
+    "десять": "10", "десяти": "10", "пятнадцать": "15", "пятнадцати": "15",
+    "двадцать": "20", "двадцати": "20", "тридцать": "30", "тридцати": "30",
+    "сорок": "40", "сорока": "40", "пятьдесят": "50", "пятидесяти": "50",
+    "сто": "100", "ста": "100",
+}
+WORD_PATTERN = re.compile(r"[а-яё]+")
+
+
+def find_links(text: str) -> list[str]:
+    """Return the links of a text, without the punctuation that ends a sentence."""
+    return [
+        link.rstrip(URL_TRAILING_PUNCTUATION) for link in URL_PATTERN.findall(text)
+    ]
+
+
+def find_invented_links(rewritten_answer: str, source_text: str) -> list[str]:
+    """Return links of the rewritten answer that are not verbatim in the source.
+
+    A model "fixing" a typo in an encoded link, or copying a link from a
+    prompt example, produces a link that leads nowhere.
+    """
+    return [
+        link for link in find_links(rewritten_answer) if link not in source_text
+    ]
+
+
 def find_invented_numbers(rewritten_answer: str, source_text: str) -> list[str]:
     """Return numbers present in the rewritten answer but absent from the source.
 
-    Step numbering is stripped first, so generated lists are not flagged.
+    Links and step numbering are stripped first, so neither is flagged.
     """
-    without_markers = LIST_MARKER_PATTERN.sub("", rewritten_answer)
-    source_numbers = set(NUMBER_PATTERN.findall(source_text))
+    without_links = URL_PATTERN.sub(".", rewritten_answer)
+    without_markers = LIST_MARKER_PATTERN.sub("", without_links)
+    # "03 квартал" and "3 квартал" are one number: compare without leading zeros.
+    source_numbers = {
+        number.lstrip("0") or "0" for number in NUMBER_PATTERN.findall(source_text)
+    }
+    source_numbers |= {
+        NUMBER_WORDS[word]
+        for word in WORD_PATTERN.findall(source_text.lower())
+        if word in NUMBER_WORDS
+    }
     return [
         number
         for number in NUMBER_PATTERN.findall(without_markers)
         if len(number) >= config.MIN_CHECKED_NUMBER_LENGTH
-        and number not in source_numbers
+        and (number.lstrip("0") or "0") not in source_numbers
     ]
 
 
@@ -84,6 +137,10 @@ def validate_entry(
         return "question_too_long"
     if len(answer.split()) > answer_limit:
         return "answer_too_long"
+
+    invented_links = find_invented_links(answer, source_text)
+    if invented_links:
+        return f"invented_links:{','.join(invented_links)}"
 
     invented_numbers = find_invented_numbers(answer, source_text)
     if invented_numbers:

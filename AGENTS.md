@@ -163,8 +163,11 @@ Every model reply comes through structured output (`gigachat.invoke_structured`:
 against a Pydantic schema; the schema lives next to its prompt, `Entry` in `kb/utils/entries.py`).
 Every generated entry is validated in code, not trusted (`entries.validate_entry`): category must be
 one of `config.CATEGORIES`, question/answer must respect word-count limits, and — the main check —
-every number in the rewritten answer must appear in the source question or answer
-(`entries.find_invented_numbers`). A merged "list of causes" answer must also be at least as long
+every link in the rewritten answer must be verbatim in the source (`entries.find_invented_links`: a
+"fixed" encoded link or one copied from a prompt example leads nowhere), and every number must
+appear in the source question or answer (`entries.find_invented_numbers`; links and list markers are
+left out, a number word in the source such as «десять» counts as its digits, leading zeros are
+ignored). A merged "list of causes" answer must also be at least as long
 as the longest source answer it merges (`dedup.validate_merged`); its word limit grows with the
 number of causes (`MAX_ANSWER_WORDS_PER_CAUSE`). A failed check never destroys data: a group with
 different causes is left as separate entries, a cluster of identical answers keeps its most
