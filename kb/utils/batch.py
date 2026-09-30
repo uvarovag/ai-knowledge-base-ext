@@ -31,6 +31,9 @@ class Outcome:
     reason: str | None = None
     topic: str | None = None
     had_private_data: bool = False
+    # What the model wrote, for a row the code validation rejected: the
+    # reviewer sees why, not only the reason code.
+    model_fields: dict[str, Any] | None = None
 
 
 Worker = Callable[[Any, SourcePair], Outcome]
@@ -119,15 +122,17 @@ def process_rows(
                     private_data_seen += outcome.had_private_data
                     bar.advance(accepted=1)
                 else:
-                    rejected.append(
-                        {
-                            "source_row": pair.row_number,
-                            "reason": outcome.reason or "unknown",
-                            "topic": outcome.topic,
-                            "question": pair.question,
-                            "answer": pair.answer,
-                        }
-                    )
+                    record = {
+                        "source_row": pair.row_number,
+                        "reason": outcome.reason or "unknown",
+                        "topic": outcome.topic,
+                        "question": pair.question,
+                        "answer": pair.answer,
+                    }
+                    if outcome.model_fields is not None:
+                        record["model_question"] = outcome.model_fields.get("question")
+                        record["model_answer"] = outcome.model_fields.get("answer")
+                    rejected.append(record)
                     bar.advance(rejected=1)
 
                 completed += 1

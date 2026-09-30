@@ -28,10 +28,11 @@ class Entry(BaseModel):
 
 NUMBER_PATTERN = re.compile(r"\d+")
 # A list marker is a short number followed by "." or ")" at the start of a line
-# or right after a sentence end: answers listing several causes are written on
-# one line ("несколько. 1. Файл слишком большой. 2. Неподдерживаемый формат").
+# or after a sentence end, a comma, a dash or an arrow: answers listing steps
+# are often written on one line ("несколько. 1. Файл слишком большой. 2. …",
+# "по шаблону [ссылка-1], 1. Тип заявки → Открытие").
 LIST_MARKER_PATTERN = re.compile(
-    r"(?:^|(?<=[.!?:;»)])\s+)\d{1,2}[.)]\s+", flags=re.MULTILINE
+    r"(?:^|(?<=[.!?:;,»)—–→-])\s+)\d{1,2}[.)]\s+", flags=re.MULTILINE
 )
 
 

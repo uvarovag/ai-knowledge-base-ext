@@ -29,7 +29,9 @@ def save_json(path: Path, payload: list[dict[str, Any]]) -> None:
     replaces the target in one step.
     """
     path.parent.mkdir(parents=True, exist_ok=True)
-    temporary_path = path.with_suffix(path.suffix + ".tmp")
+    # One temporary file per process: two runs in parallel terminals may save
+    # the same shared file at once.
+    temporary_path = path.with_suffix(f"{path.suffix}.{os.getpid()}.tmp")
     temporary_path.write_text(
         json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8"
     )

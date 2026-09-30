@@ -160,7 +160,14 @@ def write_knowledge_base(
 def write_rejected(records: list[dict[str, Any]], path: Path) -> None:
     """Write the rows left out of a base, with the reason, for a reviewer."""
     rows = [
-        [record["source_row"], record["reason"], record["question"], record["answer"]]
+        [
+            record["source_row"],
+            record["reason"],
+            record["question"],
+            record["answer"],
+            record.get("model_question") or "",
+            record.get("model_answer") or "",
+        ]
         for record in sorted(records, key=lambda record: record["source_row"])
     ]
     write_sheet(path, config.REJECTED_HEADERS, config.REJECTED_COLUMN_WIDTHS, rows)

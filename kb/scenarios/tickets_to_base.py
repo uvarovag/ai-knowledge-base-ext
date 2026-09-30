@@ -53,7 +53,7 @@ def process_ticket(llm: Any, pair: SourcePair, source_file: str) -> batch.Outcom
         fields, pair.question + "\n" + pair.answer
     )
     if validation_error:
-        return batch.Outcome(reason=validation_error, topic=topic)
+        return batch.Outcome(reason=validation_error, topic=topic, model_fields=fields)
 
     return batch.Outcome(
         entry=entries.new_entry(

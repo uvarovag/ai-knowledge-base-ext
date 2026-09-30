@@ -20,6 +20,7 @@ category altogether.
 
 from __future__ import annotations
 
+import os
 import re
 from collections import Counter, defaultdict
 from typing import Any
@@ -164,7 +165,8 @@ def save_embedding_cache(cache: dict[str, np.ndarray]) -> None:
     """Write the embeddings cache atomically, like storage.save_json."""
     path = config.EMBEDDINGS_CACHE
     path.parent.mkdir(parents=True, exist_ok=True)
-    temporary_path = path.with_suffix(".tmp.npz")
+    # One temporary file per process: parallel runs share this cache.
+    temporary_path = path.with_suffix(f".{os.getpid()}.tmp.npz")
     np.savez(temporary_path, **cache)
     temporary_path.replace(path)
 

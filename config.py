@@ -105,7 +105,9 @@ GIGACHAT_EMBEDDINGS_MODEL = "EmbeddingsGigaR"
 # ----- Runtime -------------------------------------------------------------
 
 WORKER_COUNT = 5
-MAX_RETRIES = 3
+# Attempts of every GigaChat call, chat and embeddings: a failed call loses a
+# row, while a retry only costs one more call and a wait.
+MAX_RETRIES = 10
 RETRY_BACKOFF_SECONDS = 5
 NETWORK_CHECK_INTERVAL_SECONDS = 30
 SAVE_EVERY = 25
@@ -210,8 +212,8 @@ MERGE_STRATEGY: Literal["accumulate", "replace"] = "accumulate"
 
 # ----- Repairing a base (scenario 2, make repair-base) ---------------------
 
-# The poor base to repair: an Excel sheet whose first sheet holds a question
-# and an answer per row. The defaults read a knowledge_base.xlsx this project
+# The poor base to repair when make repair-base gets no FILE: an Excel sheet
+# whose first sheet holds a question and an answer per row. The defaults read a knowledge_base.xlsx this project
 # wrote, so a base can be fed back in as is.
 REPAIR_INPUT_PATH = DATA_DIR / "base_to_repair.xlsx"
 REPAIR_QUESTION_COLUMNS: tuple[str, ...] = ("Вопрос",)
@@ -220,10 +222,6 @@ REPAIR_ANSWER_COLUMNS: tuple[str, ...] = ("Ответ",)
 # Columns copied from the input into every entry, for traceability.
 REPAIR_EXTRA_COLUMNS: tuple[str, ...] = ()
 
-# Attempts of the repair call, above MAX_RETRIES: a failed call drops a row of
-# the base, while a retry only costs one more call.
-REPAIR_MAX_RETRIES = 5
-
 # A base holds long regulatory answers that a repair can shorten only so far,
 # so its answers get a higher ceiling than MAX_ANSWER_WORDS, and the model a
 # larger output budget than GIGACHAT_MAX_TOKENS to write them: a reply cut off
@@ -231,12 +229,11 @@ REPAIR_MAX_RETRIES = 5
 REPAIR_MAX_ANSWER_WORDS = 500
 REPAIR_MAX_TOKENS = 4000
 
-# The repaired base and the rows left out of it, with the reason. The living
-# base of scenario 1 is never touched.
+# Results of a repair go to REPAIRED_BASE_DIR/<input file stem>/:
+# knowledge_base.json and .xlsx, and rejected.xlsx with the rows left out. One
+# folder per input keeps parallel runs apart; the living base of scenario 1 is
+# never touched.
 REPAIRED_BASE_DIR = DATA_DIR / "repaired"
-REPAIRED_BASE_JSON = REPAIRED_BASE_DIR / "knowledge_base.json"
-REPAIRED_BASE_XLSX = REPAIRED_BASE_DIR / "knowledge_base.xlsx"
-REPAIR_REJECTED_XLSX = REPAIRED_BASE_DIR / "rejected.xlsx"
 
 # ----- Excel export --------------------------------------------------------
 
@@ -257,8 +254,16 @@ COLUMN_WIDTHS: tuple[int, ...] = (50, 90, 22, 24, 18, 14)
 EXTRA_COLUMN_WIDTH = 22
 
 # Sheet of the rows left out of a repaired base.
-REJECTED_HEADERS: tuple[str, ...] = ("Строка источника", "Причина", "Вопрос", "Ответ")
-REJECTED_COLUMN_WIDTHS: tuple[int, ...] = (16, 40, 50, 90)
+# The model's columns are filled when the code validation rejected its version.
+REJECTED_HEADERS: tuple[str, ...] = (
+    "Строка источника",
+    "Причина",
+    "Вопрос",
+    "Ответ",
+    "Вопрос модели",
+    "Ответ модели",
+)
+REJECTED_COLUMN_WIDTHS: tuple[int, ...] = (16, 40, 50, 90, 50, 90)
 
 HEADER_FILL_COLOR = "D9E1F2"
 

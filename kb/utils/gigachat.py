@@ -128,7 +128,6 @@ def invoke_structured(
     user_prompt: str,
     schema: type[BaseModel],
     label: str,
-    attempts: int = config.MAX_RETRIES,
 ) -> dict[str, Any] | None:
     """Call the model and return its answer as a dict of the schema, retrying on failure.
 
@@ -138,8 +137,7 @@ def invoke_structured(
     answered in prose instead of being classified. Pydantic validates the
     arguments; a reply that fails validation is retried like a network error.
 
-    Returns None if every attempt fails. The label identifies the item in logs;
-    a caller whose failures are costly passes more attempts.
+    Returns None if every attempt fails. The label identifies the item in logs.
     """
     # include_raw keeps the model's reply next to the parsed result, so a
     # failure is logged with what the model actually said.
@@ -148,7 +146,7 @@ def invoke_structured(
     )
     messages = [("system", system_prompt), ("user", user_prompt)]
 
-    for attempt in range(1, attempts + 1):
+    for attempt in range(1, config.MAX_RETRIES + 1):
         wait_for_network()
         try:
             result = structured_llm.invoke(messages)
@@ -164,11 +162,11 @@ def invoke_structured(
                 "%s: attempt %d/%d failed: %s: %s",
                 label,
                 attempt,
-                attempts,
+                config.MAX_RETRIES,
                 type(error).__name__,
                 error,
             )
-            if attempt < attempts:
+            if attempt < config.MAX_RETRIES:
                 time.sleep(config.RETRY_BACKOFF_SECONDS * attempt)
 
     return None

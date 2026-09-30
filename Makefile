@@ -43,8 +43,10 @@ run: ## Scenario 1: grow the living base from new dumps in config.DUMP_PATHS
 dedupe-base: ## Scenario 1 maintenance: deduplicate the living base
 	@$(SETUP_ENV) && caffeinate -is python -m kb.scenarios.dedupe_base
 
-repair-base: ## Scenario 2: repair and deduplicate the base in config.REPAIR_INPUT_PATH
-	@$(SETUP_ENV) && caffeinate -is python -m kb.scenarios.repair_base
+# FILE is a variable, not a positional argument: make splits arguments on spaces, and
+# base file names have them.
+repair-base: ## Scenario 2: repair and deduplicate a base. Usage: make repair-base [FILE="base.xlsx"]
+	@$(SETUP_ENV) && caffeinate -is python -m kb.scenarios.repair_base $(if $(FILE),"$(FILE)",)
 
 clean: ## Remove the venv and caches (never touches data/)
 	@rm -rf .venv/ .uv-cache/ __pycache__/

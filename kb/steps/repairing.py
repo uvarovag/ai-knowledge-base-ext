@@ -227,6 +227,5 @@ def run_repair(llm: Any, pair: SourcePair) -> dict[str, Any] | None:
         REPAIR_USER_PROMPT.format(question=question, answer=answer),
         schema=RepairedEntry,
         label=f"row {pair.row_number} repair",
-        attempts=config.REPAIR_MAX_RETRIES,
     )
     return None if reply is None else links.unmask_links(reply, link_map)

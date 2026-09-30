@@ -19,7 +19,8 @@ pandas/openpyxl for Excel. Two scenarios, each one make target:
 1. **Tickets to base** (`make run`) — grows the living base `data/knowledge_base.json` (source
    of truth, `.xlsx` view) from Excel dumps of support tickets.
 2. **Repair a base** (`make repair-base`) — turns a poor base (an Excel sheet of questions and
-   answers) into a good one in `data/repaired/`, plus a sheet of the rows left out and why.
+   answers) into a good one in `data/repaired/<input stem>/`, plus a sheet of the rows left out
+   and why. The input file is a command-line argument, so two files can run in two terminals.
 
 ## Commands
 
@@ -29,7 +30,7 @@ source activate.sh  # activate the venv with the same environment as the Makefil
 make inspect        # check the input files' columns against config.py and that GigaChat and embeddings answer
 make run            # scenario 1 under caffeinate (network calls die when the Mac sleeps)
 make dedupe-base    # scenario 1 maintenance: deduplicate the living base against itself
-make repair-base    # scenario 2
+make repair-base FILE="base.xlsx"  # scenario 2; without FILE reads config.REPAIR_INPUT_PATH
 make help           # every target
 ```
 
@@ -156,11 +157,19 @@ answer is completed from the question, both are brought to the canonical format 
 names and contacts of people in charge, unlike scenario 1. Only a row whose
 answer holds nothing to keep (empty, cut off, a reply from the conversation, an answer that
 explains nothing) is left out, with the model's reason. Long regulatory answers get their own
-ceiling (`REPAIR_MAX_ANSWER_WORDS`) and output budget (`REPAIR_MAX_TOKENS`), and the repair call
-more attempts (`REPAIR_MAX_RETRIES`) than the default `MAX_RETRIES`: a failed call loses a row. A row without an answer is left out without a call. Then
-`dedup.collapse_duplicates` over the whole result, candidates as in scenario 1. Outputs:
-`REPAIRED_BASE_JSON` / `_XLSX` and `REPAIR_REJECTED_XLSX` (source row, reason, question,
-answer). The living base of scenario 1 is never touched.
+ceiling (`REPAIR_MAX_ANSWER_WORDS`) and output budget (`REPAIR_MAX_TOKENS`). A row without an
+answer is left out without a call. Then
+`dedup.collapse_duplicates` over the whole result, candidates as in scenario 1. Outputs go to
+`REPAIRED_BASE_DIR/<input stem>/`: `knowledge_base.json` / `.xlsx` and `rejected.xlsx` (source row,
+reason, question, answer, and the model's question and answer when the code validation rejected
+them — `batch.Outcome.model_fields`, in both scenarios' `rejected.json` too). The living base of
+scenario 1 is never touched.
+
+Runs on different input files may go in parallel: staging and outputs are per input, and the files
+several runs share are written through a per-process temporary file (`storage.save_json`,
+`matching.save_embedding_cache`; two runs adding embeddings at once may drop each other's new
+vectors, which only costs re-embedding) or appended (`errors.log`). Two runs on the same file are
+not supported.
 
 ### Guardrails on LLM output
 
@@ -207,7 +216,8 @@ categories; `EMBEDDING_CANDIDATE_THRESHOLD` / `EMBEDDING_TOP_K` bound the embedd
 ### Shared infrastructure notes
 
 `prompts.render_prompt` does literal `<<KEY>>` substitution — not `str.format`, because templates
-contain literal `{` `}` from JSON examples. `gigachat.invoke_structured` retries any failure — a
+contain literal `{` `}` from JSON examples. `gigachat.invoke_structured` retries any failure up to
+`MAX_RETRIES` (10, as the embeddings) — a
 GigaChat error, a failed validation, a reply without the function call — with backoff, waits on
 `wait_for_network` when the GigaChat host drops, and logs a failed attempt with the model's raw
 reply (`describe_reply`). `logs.configure_logging` also appends every warning and error to
