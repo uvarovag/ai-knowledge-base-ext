@@ -33,14 +33,14 @@ setup: ## Create venv, install uv and requirements.txt
 	@$(SETUP_ENV) && pip install --upgrade pip && pip install uv && uv pip install -r requirements.txt
 	@echo "✅ Venv created, dependencies installed."
 
-inspect: ## Check column names and samples of the dumps against config.py
+inspect: ## Check the dumps against config.py and that GigaChat and embeddings answer
 	@$(SETUP_ENV) && python inspect_dump.py
 
 # caffeinate keeps the Mac awake for hours-long runs: network calls die when it sleeps.
 run: ## Process new dumps from config.DUMP_PATHS and rebuild the Excel export
 	@$(SETUP_ENV) && caffeinate -is python pipeline.py
 
-dedupe-base: ## Deduplicate the living base by question embeddings
+dedupe-base: ## Deduplicate the living base by question embeddings and trigrams
 	@$(SETUP_ENV) && caffeinate -is python dedupe_base.py
 
 clean: ## Remove the venv and caches (never touches data/)

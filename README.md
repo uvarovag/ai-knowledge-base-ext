@@ -18,7 +18,7 @@
 
 ```bash
 make setup          # venv, uv, зависимости из requirements.txt
-make inspect        # разово: сверить названия колонок новой выгрузки
+make inspect        # сверить колонки новой выгрузки и проверить, что GigaChat и эмбеддинги отвечают
 make run            # прогон пайплайна
 make dedupe-base    # дедупликация накопленной базы по эмбеддингам
 make help           # все команды
