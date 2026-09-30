@@ -216,11 +216,14 @@ categories; `EMBEDDING_CANDIDATE_THRESHOLD` / `EMBEDDING_TOP_K` bound the embedd
 ### Shared infrastructure notes
 
 `prompts.render_prompt` does literal `<<KEY>>` substitution — not `str.format`, because templates
-contain literal `{` `}` from JSON examples. `gigachat.invoke_structured` retries any failure up to
-`MAX_RETRIES` (10, as the embeddings) — a
-GigaChat error, a failed validation, a reply without the function call — with backoff, waits on
-`wait_for_network` when the GigaChat host drops, and logs a failed attempt with the model's raw
-reply (`describe_reply`). `logs.configure_logging` also appends every warning and error to
+contain literal `{` `}` from JSON examples. Every GigaChat call, chat and embeddings, goes through
+`gigachat.call_with_retries`: a failure — a GigaChat error, a failed validation, a reply without the
+function call — uses one of `MAX_RETRIES` (10) attempts with a growing pause and is logged with the
+model's raw reply (`describe_reply`); a 429 uses none — every thread of the process waits out one
+shared cooldown that doubles while 429s keep coming (`RATE_LIMIT_*`), so the process backs off as a
+whole; the host dropping is waited out by `wait_for_network`. The cooldown is per process: parallel
+runs share the server's limit, so lower `WORKER_COUNT` when they keep hitting it. The library's own
+429 warnings are silenced in `configure_logging`, the pause is logged once. `logs.configure_logging` also appends every warning and error to
 `data/errors.log`. `gigachat.build_llm(max_tokens)` / `build_embedder` are the only places that
 construct GigaChat clients (merges pass `MERGE_MAX_TOKENS`); `storage.hash_text` / `hash_entry` are
 the content keys of every cache.

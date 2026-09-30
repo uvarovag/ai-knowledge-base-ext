@@ -180,3 +180,6 @@ def configure_logging() -> None:
     root.addHandler(console_handler)
     root.addHandler(error_handler)
     root.setLevel(logging.INFO)
+    # The GigaChat library warns on every 429 by itself; call_with_retries
+    # already reports the pause, once for all workers.
+    logging.getLogger("gigachat").setLevel(logging.ERROR)

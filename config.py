@@ -108,6 +108,15 @@ WORKER_COUNT = 5
 # Attempts of every GigaChat call, chat and embeddings: a failed call loses a
 # row, while a retry only costs one more call and a wait.
 MAX_RETRIES = 10
+
+# A 429 "Too many requests" does not use up an attempt: every call of the
+# process pauses together, first for RATE_LIMIT_BASE_SECONDS, doubling while
+# 429s keep coming, up to RATE_LIMIT_MAX_SECONDS. A call gives up after
+# RATE_LIMIT_MAX_WAITS such pauses. Parallel runs share the server's limit:
+# lower WORKER_COUNT when two terminals keep hitting it.
+RATE_LIMIT_BASE_SECONDS = 10
+RATE_LIMIT_MAX_SECONDS = 120
+RATE_LIMIT_MAX_WAITS = 30
 RETRY_BACKOFF_SECONDS = 5
 NETWORK_CHECK_INTERVAL_SECONDS = 30
 SAVE_EVERY = 25
