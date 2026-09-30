@@ -33,7 +33,7 @@ run: ## Process new dumps from config.DUMP_PATHS and rebuild the Excel export
 	@$(SETUP_ENV) && caffeinate -is python pipeline.py
 
 dedupe-base: ## Deduplicate the living base by question embeddings
-	@$(SETUP_ENV) && caffeinate -is python dedupe_base_embeddings.py
+	@$(SETUP_ENV) && caffeinate -is python dedupe_base.py
 
 clean: ## Remove the venv and caches (never touches data/)
 	@rm -rf .venv/ .uv-cache/ __pycache__/

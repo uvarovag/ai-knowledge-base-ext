@@ -17,6 +17,7 @@ from typing import Any, ClassVar
 from urllib.parse import urlparse
 
 from langchain_gigachat.chat_models import GigaChat
+from langchain_gigachat.embeddings import GigaChatEmbeddings
 
 import config
 
@@ -258,6 +259,16 @@ def hash_file(path: Path) -> str:
     return digest.hexdigest()
 
 
+def hash_text(text: str) -> str:
+    """Return the SHA-256 of a text: a cache key independent of an entry's position."""
+    return hashlib.sha256(text.strip().encode("utf-8")).hexdigest()
+
+
+def hash_entry(entry: dict[str, Any]) -> str:
+    """Hash an entry by its question and answer: a verdict depends on both."""
+    return hash_text(entry["question"] + "\n" + entry["answer"])
+
+
 def staging_dir_for(dump_path: Path) -> Path:
     """Return the staging directory of a dump, creating it if needed.
 
@@ -305,8 +316,12 @@ def wait_for_network() -> None:
 # ----- Model ---------------------------------------------------------------
 
 
-def build_llm() -> GigaChat:
-    """Instantiate the GigaChat client with project defaults."""
+def build_llm(max_tokens: int = config.GIGACHAT_MAX_TOKENS) -> GigaChat:
+    """Instantiate the GigaChat client with project defaults.
+
+    Merging several entries into one needs a bigger output budget than the
+    default, so the merge steps pass config.MERGE_MAX_TOKENS.
+    """
     return GigaChat(
         model=config.GIGACHAT_MODEL_NAME,
         base_url=config.GIGACHAT_BASE_URL,
@@ -317,7 +332,50 @@ def build_llm() -> GigaChat:
         timeout=config.GIGACHAT_TIMEOUT_SECONDS,
         top_p=config.GIGACHAT_TOP_P,
         temperature=config.GIGACHAT_TEMPERATURE,
-        max_tokens=config.GIGACHAT_MAX_TOKENS,
+        max_tokens=max_tokens,
+    )
+
+
+def build_embedder() -> GigaChatEmbeddings:
+    """Instantiate the embeddings client with the same endpoint and certificates."""
+    return GigaChatEmbeddings(
+        model=config.GIGACHAT_EMBEDDINGS_MODEL,
+        base_url=config.GIGACHAT_BASE_URL,
+        verify_ssl_certs=config.GIGACHAT_VERIFY_SSL_CERTS,
+        cert_file=str(config.CERT_FILE),
+        key_file=str(config.KEY_FILE),
+        timeout=config.GIGACHAT_TIMEOUT_SECONDS,
+    )
+
+
+def embed_texts(embedder: GigaChatEmbeddings, texts: list[str]) -> list[list[float]]:
+    """Embed one batch of texts, retrying like invoke_json does for the chat model.
+
+    Raises:
+        RuntimeError: if every attempt fails. Unlike a failed chat call, which
+        costs one entry, missing vectors would silently hide duplicates, so the
+        run stops instead.
+    """
+    for attempt in range(1, config.MAX_RETRIES + 1):
+        wait_for_network()
+        try:
+            vectors = embedder.embed_documents(texts)
+            if len(vectors) != len(texts):
+                raise ValueError(f"Expected {len(texts)} vectors, got {len(vectors)}")
+            return vectors
+        except Exception as error:
+            logger.warning(
+                "Embeddings batch of %d: attempt %d/%d failed: %s",
+                len(texts),
+                attempt,
+                config.MAX_RETRIES,
+                error,
+            )
+            if attempt < config.MAX_RETRIES:
+                time.sleep(config.RETRY_BACKOFF_SECONDS * attempt)
+    raise RuntimeError(
+        "Embeddings request failed after every retry; set "
+        'EMBEDDING_BACKEND = "none" in config.py to run on trigrams only'
     )
 
 

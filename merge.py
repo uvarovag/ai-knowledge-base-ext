@@ -14,6 +14,9 @@ answers relate:
 Matching is one to one: a new entry updates at most one entry of the base, and
 an entry of the base is updated by at most one new entry. Entries with no match
 are appended.
+
+Verdicts are cached in the staging directory of the dump, so an interrupted
+merge does not ask the model about the same pairs again.
 """
 
 from __future__ import annotations
@@ -124,8 +127,12 @@ def check_match(
     new_entries: list[dict[str, Any]],
     base_entries: list[dict[str, Any]],
     pair: tuple[int, int],
-) -> Match | None:
-    """Ask the model whether a new entry answers the same question as a base one."""
+) -> tuple[tuple[int, int], str | None]:
+    """Ask the model whether a new entry answers the same question as a base one.
+
+    Returns the pair with the relation of the answers, VerdictCache.UNIQUE when
+    the questions differ, or None when the model gave no usable verdict.
+    """
     new_index, base_index = pair
     label = f"match new {new_index} / base {base_index}"
     verdict = common.invoke_json(
@@ -142,15 +149,67 @@ def check_match(
     )
     if verdict is None:
         logger.warning("%s: no verdict, treating the new entry as new", label)
-        return None
+        return pair, None
     if verdict.get("same_question") is not True:
-        return None
+        return pair, deduplicate.VerdictCache.UNIQUE
+    return pair, deduplicate.read_relation(verdict)
 
-    return Match(
-        new_index=new_index,
-        base_index=base_index,
-        relation=deduplicate.read_relation(verdict),
-    )
+
+def judge_matches(
+    new_entries: list[dict[str, Any]],
+    base_entries: list[dict[str, Any]],
+    candidates: list[tuple[int, int]],
+    cache: deduplicate.VerdictCache,
+) -> list[Match]:
+    """Ask the model about every candidate pair, reusing cached verdicts."""
+    confirmed: list[Match] = []
+
+    def register(pair: tuple[int, int], relation: str) -> None:
+        if relation != deduplicate.VerdictCache.UNIQUE:
+            confirmed.append(Match(pair[0], pair[1], relation))
+
+    pending: list[tuple[int, int]] = []
+    for pair in candidates:
+        cached = cache.get(pair)
+        if cached is None:
+            pending.append(pair)
+        else:
+            register(pair, cached)
+
+    if len(pending) < len(candidates):
+        logger.info(
+            "Merge: %d of %d pairs taken from cache",
+            len(candidates) - len(pending),
+            len(candidates),
+        )
+    if not pending:
+        return confirmed
+
+    llm = common.build_llm()
+    completed = 0
+    bar = common.ProgressBar(len(pending), "Merge: matching against base")
+    with ThreadPoolExecutor(max_workers=config.WORKER_COUNT) as executor:
+        futures = [
+            executor.submit(check_match, llm, new_entries, base_entries, pair)
+            for pair in pending
+        ]
+        for future in as_completed(futures):
+            pair, relation = future.result()
+            if relation is None:
+                bar.advance(failed=1)
+                continue
+            cache.add(pair, relation)
+            register(pair, relation)
+            if relation == deduplicate.VerdictCache.UNIQUE:
+                bar.advance(new=1)
+            else:
+                bar.advance(matched=1)
+            completed += 1
+            if completed % config.SAVE_EVERY == 0:
+                cache.save()
+    bar.finish()
+    cache.save()
+    return confirmed
 
 
 def select_matches(confirmed: list[Match]) -> dict[int, Match]:
@@ -214,23 +273,13 @@ def build_updated_entry(
     if merged is None:
         logger.warning("%s: keeping the fresh entry as is", label)
         return new_entry
-
-    source_file, source_rows = common.merge_sources(group_entries)
-    return {
-        "category": merged["category"],
-        "question": merged["question"],
-        "answer": merged["answer"],
-        "source_file": source_file,
-        "source_rows": source_rows,
-        "source_columns": common.merge_source_columns(group_entries),
-        "updated_at": common.today(),
-    }
+    return deduplicate.finalize(merged, group_entries)
 
 
 # ----- Entry point ---------------------------------------------------------
 
 
-def run(deduped_path: Path) -> tuple[int, int]:
+def run(deduped_path: Path, staging_dir: Path) -> tuple[int, int]:
     """Merge one batch into the living base.
 
     Returns the number of updated and of added entries.
@@ -248,28 +297,14 @@ def run(deduped_path: Path) -> tuple[int, int]:
         config.MERGE_STRATEGY,
     )
 
-    llm = common.build_llm()
     confirmed: list[Match] = []
-
     if base_entries:
         candidates = matching.find_candidate_matches(new_entries, base_entries)
-        logger.info("Found %d candidate matches against the base", len(candidates))
-
-        if candidates:
-            bar = common.ProgressBar(len(candidates), "Merge: matching against base")
-            with ThreadPoolExecutor(max_workers=config.WORKER_COUNT) as executor:
-                futures = [
-                    executor.submit(check_match, llm, new_entries, base_entries, pair)
-                    for pair in candidates
-                ]
-                for future in as_completed(futures):
-                    match = future.result()
-                    if match is None:
-                        bar.advance(new=1)
-                        continue
-                    confirmed.append(match)
-                    bar.advance(matched=1)
-            bar.finish()
+        cache_path = staging_dir / "match_verdicts.json"
+        if config.FORCE_REPROCESS and cache_path.exists():
+            cache_path.unlink()
+        cache = deduplicate.VerdictCache(cache_path, new_entries, base_entries)
+        confirmed = judge_matches(new_entries, base_entries, candidates, cache)
 
     matches = select_matches(confirmed)
     accumulated_count = sum(should_accumulate(match) for match in matches.values())
@@ -281,6 +316,7 @@ def run(deduped_path: Path) -> tuple[int, int]:
 
     updated_by_base_index: dict[int, dict[str, Any]] = {}
     if matches:
+        llm = common.build_llm(max_tokens=config.MERGE_MAX_TOKENS)
         bar = common.ProgressBar(len(matches), "Merge: updating entries")
         with ThreadPoolExecutor(max_workers=config.WORKER_COUNT) as executor:
             futures = {
@@ -323,4 +359,5 @@ def run(deduped_path: Path) -> tuple[int, int]:
 if __name__ == "__main__":
     common.configure_logging()
     for path in config.DUMP_PATHS:
-        run(config.STAGING_DIR / path.stem / "deduped.json")
+        staging = common.staging_dir_for(path)
+        run(staging / "deduped.json", staging)

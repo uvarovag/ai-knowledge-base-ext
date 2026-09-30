@@ -44,8 +44,12 @@ def find_pending_dumps() -> list[tuple[Path, str]]:
 
 
 def register_dump(path: Path, file_hash: str, updated: int, added: int) -> None:
-    """Append a processed dump to the ledger."""
-    ledger = common.load_json(config.PROCESSED_DUMPS_JSON)
+    """Record a processed dump in the ledger, replacing an earlier record of it."""
+    ledger = [
+        record
+        for record in common.load_json(config.PROCESSED_DUMPS_JSON)
+        if record["hash"] != file_hash
+    ]
     ledger.append(
         {
             "file": path.name,
@@ -66,7 +70,7 @@ def process_dump(path: Path, file_hash: str) -> None:
     logger.info("=== %s ===", path.name)
     extracted_path = extract.run(path, staging_dir)
     deduped_path = deduplicate.run(extracted_path, staging_dir)
-    updated, added = merge.run(deduped_path)
+    updated, added = merge.run(deduped_path, staging_dir)
 
     register_dump(path, file_hash, updated, added)
 

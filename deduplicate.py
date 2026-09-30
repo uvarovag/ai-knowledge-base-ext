@@ -12,26 +12,29 @@
    built by chaining confirmations together. When an entry is confirmed against
    a member but was never compared to the representative, that missing pair is
    sent to the model instead of being silently dropped.
-4. Merge: a group is rewritten into one entry. When the answers name different
-   causes of the same problem, the entry lists them as numbered possible causes
-   instead of picking one.
+4. Merge: a group is rewritten into one entry in two steps, so the result has
+   no repetitions. Entries whose answers say the same thing collapse into one
+   full answer first; if several different answers remain, they become one
+   entry listing the possible causes.
 
-Nothing is lost when a merge fails. A group of complementary answers is left
-unmerged rather than collapsed into one of its members, and a group of
-identical answers keeps only the provenance of the entry that survives.
+Nothing is lost when a merge fails. A group of different causes is left as
+separate entries rather than collapsed into one of them; a cluster of
+identical answers keeps its most detailed entry, with the provenance of all.
 
-Entries whose answers contradict each other are never merged inside one batch:
-one of them is wrong, and folding them into a list would produce a wrong entry.
+Entries whose answers contradict each other are never merged: one of them is
+wrong, and folding them into a list would hand the user a stale instruction
+as a working one. Such pairs are logged.
 
-This module also exposes the merge helpers used by merge.py when it folds a
-fresh entry into an existing one of the living base.
+Verdicts are cached by the content of the two entries, not by their positions,
+so a cache survives the list changing underneath it. dedupe_base.py runs the
+same flow (collapse_duplicates) over the living base, and merge.py uses the
+merge helpers when it folds a fresh entry into an existing one.
 """
 
 from __future__ import annotations
 
-import threading
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
@@ -268,35 +271,60 @@ MERGE_VARIANTS_SYSTEM_PROMPT = common.render_prompt(
 class VerdictCache:
     """Verdicts already received from the model, kept on disk between runs.
 
-    Pair indices refer to positions in extracted.json, which is written sorted
-    and does not change between runs, so a cached verdict stays valid. Pairs the
-    model called unique are cached too: not re-asking about them is most of the
-    saving.
+    A verdict is keyed by the hashes of the two entries' question and answer,
+    so it stays valid when entries are added, removed or reordered between
+    runs. Pairs the model called unique are cached too: not re-asking about
+    them is most of the saving.
+
+    The pair indices given to get and add refer to the entry lists passed to
+    the constructor; a lookup across two lists (merge.py) gives the second list
+    too, and the pair is then (index in first, index in second).
     """
 
     UNIQUE = "unique"
 
-    def __init__(self, path: Path) -> None:
+    def __init__(
+        self,
+        path: Path,
+        entries: list[dict[str, Any]],
+        other_entries: list[dict[str, Any]] | None = None,
+    ) -> None:
         self.path = path
-        self.verdicts: dict[tuple[int, int], str] = {}
-        for record in common.load_json(path):
-            self.verdicts[(record["pair"][0], record["pair"][1])] = record["relation"]
+        self.hashes = [common.hash_entry(entry) for entry in entries]
+        self.other_hashes = (
+            self.hashes
+            if other_entries is None
+            else [common.hash_entry(entry) for entry in other_entries]
+        )
+        self.verdicts: dict[tuple[str, str], str] = {}
+
+        records = common.load_json(path)
+        if records and "key" not in records[0]:
+            logger.warning("%s: verdict cache in an old format, starting over", path)
+            records = []
+        for record in records:
+            first, second = record["key"]
+            self.verdicts[(first, second)] = record["relation"]
+
+    def key_for(self, pair: tuple[int, int]) -> tuple[str, str]:
+        first, second = self.hashes[pair[0]], self.other_hashes[pair[1]]
+        return (first, second) if first <= second else (second, first)
 
     def get(self, pair: tuple[int, int]) -> str | None:
         """Return the cached relation of a pair, or None if it is not cached."""
-        return self.verdicts.get(pair)
+        return self.verdicts.get(self.key_for(pair))
 
     def add(self, pair: tuple[int, int], relation: str) -> None:
         """Remember the relation of a pair."""
-        self.verdicts[pair] = relation
+        self.verdicts[self.key_for(pair)] = relation
 
     def save(self) -> None:
         """Write the cache so an interrupted run can pick up here."""
         common.save_json(
             self.path,
             [
-                {"pair": list(pair), "relation": relation}
-                for pair, relation in sorted(self.verdicts.items())
+                {"key": list(key), "relation": relation}
+                for key, relation in sorted(self.verdicts.items())
             ],
         )
 
@@ -380,10 +408,11 @@ def judge_pairs(
     if not pending:
         return relations, alternatives_count, contradiction_count
 
-    save_lock = threading.Lock()
     completed = 0
     bar = common.ProgressBar(len(pending), label)
 
+    # Only the workers run in parallel; every result is folded in here, on the
+    # main thread, so the cache needs no lock.
     with ThreadPoolExecutor(max_workers=config.WORKER_COUNT) as executor:
         futures = [executor.submit(check_pair, llm, entries, pair) for pair in pending]
         for future in as_completed(futures):
@@ -408,12 +437,11 @@ def judge_pairs(
                 else:
                     bar.advance(duplicates=1)
 
-            with save_lock:
-                cache.add(pair, relation)
-                register(pair, relation)
-                completed += 1
-                if completed % config.SAVE_EVERY == 0:
-                    cache.save()
+            cache.add(pair, relation)
+            register(pair, relation)
+            completed += 1
+            if completed % config.SAVE_EVERY == 0:
+                cache.save()
 
     bar.finish()
     cache.save()
@@ -430,15 +458,6 @@ class Group:
 
     representative: int
     members: list[int]
-    relations: list[str] = field(default_factory=list)
-
-    @property
-    def has_alternatives(self) -> bool:
-        return RELATION_ALTERNATIVES in self.relations
-
-    @property
-    def is_mixed(self) -> bool:
-        return RELATION_SAME in self.relations and self.has_alternatives
 
 
 def sort_key(pair: tuple[int, int]) -> tuple[int, int]:
@@ -505,12 +524,9 @@ def build_groups(
     groups: list[Group] = []
     for index in entry_order(entries):
         for group in groups:
-            relation = relations.get(sort_key((index, group.representative)))
-            if relation is None:
-                continue
-            group.members.append(index)
-            group.relations.append(relation)
-            break
+            if sort_key((index, group.representative)) in relations:
+                group.members.append(index)
+                break
         else:
             groups.append(Group(representative=index, members=[index]))
 
@@ -537,9 +553,15 @@ def validate_merged(
 ) -> str | None:
     """Check a merged entry. Returns a rejection reason, or None if valid."""
     source_text = " ".join(entry["answer"] for entry in group_entries)
-    answer_limit = (
-        config.MAX_VARIANTS_ANSWER_WORDS if as_variants else config.MAX_ANSWER_WORDS
-    )
+    if as_variants:
+        # A list of causes grows with the number of causes: one of six cannot
+        # fit the limit meant for two or three.
+        answer_limit = max(
+            config.MAX_VARIANTS_ANSWER_WORDS,
+            len(group_entries) * config.MAX_ANSWER_WORDS_PER_CAUSE,
+        )
+    else:
+        answer_limit = config.MAX_ANSWER_WORDS
 
     rejection_reason = common.validate_entry(merged, source_text, answer_limit)
     if rejection_reason is not None:
@@ -585,92 +607,148 @@ def merge_entries(
     return merged
 
 
-def merge_group(
-    llm: Any, entries: list[dict[str, Any]], group: Group
-) -> list[dict[str, Any]]:
-    """Merge one group into entries for the result.
-
-    Returns one entry on success. On failure nothing is lost: a group of
-    complementary answers is returned unmerged, and a group of identical
-    answers keeps its representative alone, with only its own provenance.
-    """
-    group_entries = [entries[index] for index in group.members]
+def finalize(merged: dict[str, Any], group_entries: list[dict[str, Any]]) -> dict[str, Any]:
+    """Build the result entry, carrying the provenance of every source entry."""
     source_file, source_rows = common.merge_sources(group_entries)
-    source_columns = common.merge_source_columns(group_entries)
+    return {
+        "category": merged["category"],
+        "question": merged["question"],
+        "answer": merged["answer"],
+        "source_file": source_file,
+        "source_rows": source_rows,
+        "source_columns": common.merge_source_columns(group_entries),
+        "updated_at": common.today(),
+    }
 
-    # Folding into a list of variants only makes sense while the list stays
-    # readable; a longer group is merged the usual way.
-    as_variants = (
-        group.has_alternatives and len(group.members) <= config.MAX_VARIANTS_PER_ENTRY
+
+def split_same_clusters(
+    group: Group, relations: dict[tuple[int, int], str]
+) -> list[list[int]]:
+    """Split a group into clusters of entries whose answers say the same thing.
+
+    Two entries share a cluster when the model called their answers same,
+    directly or through a chain of such verdicts inside the group. Entries
+    confirmed as alternatives stay in clusters of their own. The cluster of
+    the representative, the most detailed entry, comes first.
+    """
+    parent = {index: index for index in group.members}
+
+    def find(index: int) -> int:
+        while parent[index] != index:
+            parent[index] = parent[parent[index]]
+            index = parent[index]
+        return index
+
+    members = set(group.members)
+    for (first, second), relation in relations.items():
+        if relation == RELATION_SAME and first in members and second in members:
+            parent[find(first)] = find(second)
+
+    clusters: dict[int, list[int]] = {}
+    for index in group.members:
+        clusters.setdefault(find(index), []).append(index)
+
+    return sorted(
+        clusters.values(),
+        key=lambda cluster: (group.representative not in cluster, min(cluster)),
     )
-    if group.is_mixed:
-        logger.info(
-            "Rows %s: group mixes identical and complementary answers, "
-            "merging as a list of variants",
-            source_rows,
-        )
 
-    merged = merge_entries(
-        llm, group_entries, as_variants, label=f"merge rows {source_rows}"
-    )
 
+def merge_same(
+    llm: Any, cluster_entries: list[dict[str, Any]], label: str
+) -> dict[str, Any]:
+    """Collapse entries that say the same thing into one full entry.
+
+    When the model fails or the result is rejected, the most detailed entry of
+    the cluster stands in: for answers that say the same thing, nothing is lost.
+    """
+    if len(cluster_entries) == 1:
+        return cluster_entries[0]
+    merged = merge_entries(llm, cluster_entries, as_variants=False, label=label)
     if merged is None:
-        if group.has_alternatives:
-            logger.warning(
-                "Rows %s: merge failed, keeping %d entries separate to avoid "
-                "losing a cause",
-                source_rows,
-                len(group_entries),
-            )
-            return group_entries
+        logger.warning("%s: keeping the most detailed entry instead", label)
+        return max(cluster_entries, key=lambda entry: len(entry["answer"]))
+    return merged
+
+
+def merge_group(
+    llm: Any,
+    entries: list[dict[str, Any]],
+    group: Group,
+    relations: dict[tuple[int, int], str],
+) -> list[dict[str, Any]]:
+    """Merge one group into one entry, in two steps.
+
+    Answers that say the same thing collapse into one full answer first. If one
+    answer remains, it is the result; if several do, the model folds them into
+    a list of possible causes. Nothing is lost: when the second step fails the
+    collapsed clusters are returned as separate entries, and when the first
+    fails the most detailed entry of the cluster stands in.
+    """
+    clusters = split_same_clusters(group, relations)
+    _, rows = common.merge_sources([entries[index] for index in group.members])
+    label = f"merge rows {rows}"
+
+    collapsed: list[tuple[dict[str, Any], list[dict[str, Any]]]] = []
+    for position, cluster in enumerate(clusters, start=1):
+        cluster_entries = [entries[index] for index in cluster]
+        cluster_label = label if len(clusters) == 1 else f"{label} cause {position}"
+        collapsed.append((merge_same(llm, cluster_entries, cluster_label), cluster_entries))
+
+    if len(collapsed) == 1:
+        merged, cluster_entries = collapsed[0]
+        return [finalize(merged, cluster_entries)]
+
+    if len(collapsed) > config.MAX_CAUSES_PER_ENTRY:
         logger.warning(
-            "Rows %s: merge failed, keeping the representative entry alone",
-            source_rows,
+            "Rows %s: %d different causes exceed MAX_CAUSES_PER_ENTRY=%d, "
+            "keeping them as separate entries",
+            rows,
+            len(collapsed),
+            config.MAX_CAUSES_PER_ENTRY,
         )
-        return [entries[group.representative]]
+        return [finalize(merged, cluster_entries) for merged, cluster_entries in collapsed]
 
-    return [
-        {
-            "category": merged["category"],
-            "question": merged["question"],
-            "answer": merged["answer"],
-            "source_file": source_file,
-            "source_rows": source_rows,
-            "source_columns": source_columns,
-            "updated_at": common.today(),
-        }
-    ]
+    variants = merge_entries(
+        llm,
+        [merged for merged, _ in collapsed],
+        as_variants=True,
+        label=f"{label} variants",
+    )
+    if variants is None:
+        logger.warning(
+            "Rows %s: keeping %d collapsed entries separate to avoid losing a cause",
+            rows,
+            len(collapsed),
+        )
+        return [finalize(merged, cluster_entries) for merged, cluster_entries in collapsed]
+
+    return [finalize(variants, [entries[index] for index in group.members])]
 
 
-# ----- Entry point ---------------------------------------------------------
+# ----- Collapsing a list ---------------------------------------------------
 
 
-def run(extracted_path: Path, staging_dir: Path) -> Path:
-    """Collapse duplicates inside one batch. Returns the path of the result."""
-    entries = common.load_json(extracted_path)
-    deduped_path = staging_dir / "deduped.json"
-    cache_path = staging_dir / "verdicts.json"
+def collapse_duplicates(
+    entries: list[dict[str, Any]],
+    candidates: list[tuple[int, int]],
+    cache: VerdictCache,
+    label: str,
+) -> list[dict[str, Any]]:
+    """Judge the candidate pairs, group the confirmed ones and merge every group.
 
-    if not entries:
-        common.save_json(deduped_path, [])
-        return deduped_path
-
-    if config.FORCE_REPROCESS and cache_path.exists():
-        cache_path.unlink()
-    cache = VerdictCache(cache_path)
-
-    logger.info("Deduplicating %d extracted entries", len(entries))
-    candidates = matching.find_candidate_pairs(entries)
-    logger.info("Found %d candidate pairs to check with the model", len(candidates))
-
-    llm = common.build_llm()
+    Returns the collapsed list in the order of the original entries. Shared by
+    the in-batch deduplication and by dedupe_base.py, which only differ in
+    where the entries and the candidates come from.
+    """
     relations: dict[tuple[int, int], str] = {}
     alternatives_count = 0
     contradiction_count = 0
 
     if candidates:
+        llm = common.build_llm()
         relations, alternatives_count, contradiction_count = judge_pairs(
-            llm, entries, candidates, cache, "Dedup: comparing pairs"
+            llm, entries, candidates, cache, f"{label}: comparing pairs"
         )
 
         # An entry confirmed against a group member but never compared to that
@@ -680,7 +758,7 @@ def run(extracted_path: Path, staging_dir: Path) -> Path:
         if missing:
             logger.info("Checking %d indirectly confirmed pairs", len(missing))
             extra_relations, extra_alternatives, extra_contradictions = judge_pairs(
-                llm, entries, missing, cache, "Dedup: checking indirect pairs"
+                llm, entries, missing, cache, f"{label}: checking indirect pairs"
             )
             relations.update(extra_relations)
             alternatives_count += extra_alternatives
@@ -700,15 +778,19 @@ def run(extracted_path: Path, staging_dir: Path) -> Path:
 
     merged_by_group: dict[int, list[dict[str, Any]]] = {}
     if duplicate_groups:
-        bar = common.ProgressBar(len(duplicate_groups), "Dedup: merging groups")
+        merge_llm = common.build_llm(max_tokens=config.MERGE_MAX_TOKENS)
+        bar = common.ProgressBar(len(duplicate_groups), f"{label}: merging groups")
         with ThreadPoolExecutor(max_workers=config.WORKER_COUNT) as executor:
             futures = {
-                executor.submit(merge_group, llm, entries, group): group.members[0]
+                executor.submit(
+                    merge_group, merge_llm, entries, group, relations
+                ): group.members[0]
                 for group in duplicate_groups
             }
             for future in as_completed(futures):
-                merged_by_group[futures[future]] = future.result()
-                bar.advance(merged=1)
+                result = future.result()
+                merged_by_group[futures[future]] = result
+                bar.advance(merged=1, entries_out=len(result))
         bar.finish()
 
     result: list[dict[str, Any]] = []
@@ -718,8 +800,33 @@ def run(extracted_path: Path, staging_dir: Path) -> Path:
         else:
             result.extend(merged_by_group[group.members[0]])
 
-    common.save_json(deduped_path, result)
     logger.info("Collapsed %d entries into %d", len(entries), len(result))
+    return result
+
+
+# ----- Entry point ---------------------------------------------------------
+
+
+def run(extracted_path: Path, staging_dir: Path) -> Path:
+    """Collapse duplicates inside one batch. Returns the path of the result."""
+    entries = common.load_json(extracted_path)
+    deduped_path = staging_dir / "deduped.json"
+    cache_path = staging_dir / "verdicts.json"
+
+    if not entries:
+        common.save_json(deduped_path, [])
+        return deduped_path
+
+    if config.FORCE_REPROCESS and cache_path.exists():
+        cache_path.unlink()
+
+    logger.info("Deduplicating %d extracted entries", len(entries))
+    candidates = matching.find_candidate_pairs(entries)
+    result = collapse_duplicates(
+        entries, candidates, VerdictCache(cache_path, entries), "Dedup"
+    )
+
+    common.save_json(deduped_path, result)
     return deduped_path
 
 

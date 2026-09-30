@@ -1,25 +1,25 @@
-"""One-off deduplication of the entries already sitting in the living base.
+"""Deduplicate the entries already sitting in the living base.
 
-deduplicate.py only collapses duplicates inside a single freshly extracted
-batch, before it is merged into the base; entries that ended up in
-knowledge_base.json through different dumps are never compared against each
-other. This script runs the same model-adjudicated grouping as
-deduplicate.run(), but over the current base, using ONLY question similarity
-to find candidate pairs (answer-similarity candidates are skipped here since
-the goal right now is collapsing near-identical questions, not catching
-shared boilerplate answers).
+The pipeline compares a new batch with itself and with the base, but never the
+base with itself, so duplicates that slipped past the matching of earlier runs
+stay until this script is run by hand. It runs the same model-adjudicated
+grouping and two-step merge as deduplicate.py, over the whole base.
 
-The base is backed up before anything is written. Verdicts are cached in
-data/staging/base_dedupe/, so an interrupted run can be resumed by running
-this script again.
+Candidates come from question embeddings and question trigrams; the category
+is ignored (the model assigns it, and one question easily lands in two). With
+config.EMBEDDING_BACKEND set to "none" the trigrams are the only signal and get
+the low config.TRIGRAM_ONLY_CANDIDATE_THRESHOLD: this is a one-off clean-up,
+so many model calls are acceptable where the pipeline could not afford them.
+
+The base is backed up before anything is written. Verdicts are cached by
+content in data/staging/base_dedupe/, so a run can be interrupted and resumed,
+and a run over a base that changed since does not pick up stale verdicts.
 
 Usage:
-    python dedupe_base.py
+    make dedupe-base
 """
 
 from __future__ import annotations
-
-from concurrent.futures import ThreadPoolExecutor, as_completed
 
 import common
 import config
@@ -27,6 +27,8 @@ import deduplicate
 import export
 import matching
 from common import logger
+
+STAGING_DIR = config.STAGING_DIR / "base_dedupe"
 
 
 def run() -> None:
@@ -40,83 +42,35 @@ def run() -> None:
     backup_path = common.backup_file(config.KNOWLEDGE_BASE_JSON)
     logger.info("Backed up base to %s", backup_path)
 
-    staging_dir = config.STAGING_DIR / "base_dedupe"
-    staging_dir.mkdir(parents=True, exist_ok=True)
-    cache_path = staging_dir / "verdicts.json"
-
+    cache_path = STAGING_DIR / "verdicts.json"
     if config.FORCE_REPROCESS and cache_path.exists():
         cache_path.unlink()
-    cache = deduplicate.VerdictCache(cache_path)
 
-    logger.info("Deduplicating %d base entries by question only", len(entries))
-    candidates = sorted(
-        matching.collect_similar_pairs(
-            entries,
-            "question",
-            config.CANDIDATE_THRESHOLD,
-            config.CANDIDATE_CROSS_CATEGORY_THRESHOLD,
-        )
+    logger.info("Deduplicating %d base entries", len(entries))
+    matrix = matching.embed_questions(entries, "Base dedup")
+    by_embedding = matching.collect_embedding_pairs(matrix)
+    trigram_threshold = (
+        config.CANDIDATE_THRESHOLD
+        if matrix is not None
+        else config.TRIGRAM_ONLY_CANDIDATE_THRESHOLD
     )
-    logger.info("Found %d candidate pairs to check with the model", len(candidates))
-
-    llm = common.build_llm()
-    relations: dict[tuple[int, int], str] = {}
-    alternatives_count = 0
-    contradiction_count = 0
-
-    if candidates:
-        relations, alternatives_count, contradiction_count = deduplicate.judge_pairs(
-            llm, entries, candidates, cache, "Base dedup: comparing pairs"
-        )
-
-        missing = deduplicate.find_missing_pairs(entries, relations)
-        if missing:
-            logger.info("Checking %d indirectly confirmed pairs", len(missing))
-            extra_relations, extra_alternatives, extra_contradictions = (
-                deduplicate.judge_pairs(
-                    llm, entries, missing, cache, "Base dedup: checking indirect pairs"
-                )
-            )
-            relations.update(extra_relations)
-            alternatives_count += extra_alternatives
-            contradiction_count += extra_contradictions
-
+    by_trigram = matching.collect_similar_pairs(
+        entries, "question", trigram_threshold, trigram_threshold
+    )
+    candidates = sorted(by_embedding | by_trigram)
     logger.info(
-        "Model confirmed %d duplicate pairs (%d complementary), %d contradicting pairs",
-        len(relations),
-        alternatives_count,
-        contradiction_count,
+        "Candidates: %d by embeddings, %d by question trigrams (threshold %.2f), "
+        "%d in total",
+        len(by_embedding),
+        len(by_trigram),
+        trigram_threshold,
+        len(candidates),
     )
 
-    groups = deduplicate.build_groups(entries, relations)
-    duplicate_groups = [group for group in groups if len(group.members) > 1]
-    logger.info("Merging %d groups", len(duplicate_groups))
-
-    merged_by_group: dict[int, list[dict]] = {}
-    if duplicate_groups:
-        bar = common.ProgressBar(len(duplicate_groups), "Base dedup: merging groups")
-        with ThreadPoolExecutor(max_workers=config.WORKER_COUNT) as executor:
-            futures = {
-                executor.submit(
-                    deduplicate.merge_group, llm, entries, group
-                ): group.members[0]
-                for group in duplicate_groups
-            }
-            for future in as_completed(futures):
-                merged_by_group[futures[future]] = future.result()
-                bar.advance(merged=1)
-        bar.finish()
-
-    result = []
-    for group in groups:
-        if len(group.members) == 1:
-            result.append(entries[group.members[0]])
-        else:
-            result.extend(merged_by_group[group.members[0]])
-
+    result = deduplicate.collapse_duplicates(
+        entries, candidates, deduplicate.VerdictCache(cache_path, entries), "Base dedup"
+    )
     common.save_json(config.KNOWLEDGE_BASE_JSON, result)
-    logger.info("Collapsed %d entries into %d", len(entries), len(result))
-
     export.run()
 
 

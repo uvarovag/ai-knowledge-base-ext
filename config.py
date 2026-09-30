@@ -25,6 +25,11 @@ DATA_DIR = Path.cwd() / "data"
 STAGING_DIR = DATA_DIR / "staging"
 BACKUP_DIR = DATA_DIR / "backups"
 
+# Question embeddings, keyed by the hash of the question text, shared by every
+# step that searches for duplicates. Never needs clearing: the same text always
+# gets the same vector.
+EMBEDDINGS_CACHE = STAGING_DIR / "embeddings.npz"
+
 KNOWLEDGE_BASE_JSON = DATA_DIR / "knowledge_base.json"
 KNOWLEDGE_BASE_XLSX = DATA_DIR / "knowledge_base.xlsx"
 PROCESSED_DUMPS_JSON = DATA_DIR / "processed_dumps.json"
@@ -86,6 +91,14 @@ GIGACHAT_TEMPERATURE = 0.0
 GIGACHAT_TOP_P = 0.1
 GIGACHAT_MAX_TOKENS = 1500
 
+# Output budget of the model when it merges entries: a list of several causes
+# is longer than the chat default above allows.
+MERGE_MAX_TOKENS = 4000
+
+# Embeddings model served by the same endpoint. "EmbeddingsGigaR" is the
+# stronger one; fall back to "Embeddings" if the endpoint has no GigaR.
+GIGACHAT_EMBEDDINGS_MODEL = "EmbeddingsGigaR"
+
 # ----- Runtime -------------------------------------------------------------
 
 WORKER_COUNT = 5
@@ -116,6 +129,30 @@ MIN_CHECKED_NUMBER_LENGTH = 1
 
 # ----- Duplicate search ----------------------------------------------------
 
+# Candidate pairs for the model come from three cheap local signals, united:
+# cosine similarity of question embeddings, trigram similarity of questions
+# and trigram similarity of answers. Embeddings are the only signal that sees
+# a paraphrase ("не приходит пароль" vs "как получить пароль после
+# регистрации"); trigrams still catch pairs with rare shared terms.
+
+# Where question embeddings come from:
+#   "gigachat" — the embeddings model of the GigaChat endpoint;
+#   "none"     — no embeddings: candidates come from trigrams only. Use while
+#                access to the embeddings model is not granted yet.
+EMBEDDING_BACKEND: Literal["gigachat", "none"] = "gigachat"
+
+# Questions per embeddings request.
+EMBEDDING_BATCH_SIZE = 50
+
+# A pair goes to the model when the cosine similarity of the question
+# embeddings reaches this value. Kept moderate: a false candidate costs one
+# model call, a missed one leaves a duplicate in the base.
+EMBEDDING_CANDIDATE_THRESHOLD = 0.80
+
+# At most this many nearest neighbours per entry are considered, so a generic
+# question does not pull half of the base into the candidate list.
+EMBEDDING_TOP_K = 8
+
 TRIGRAM_SIZE = 3
 
 # A pair goes to the model when its QUESTIONS are similar enough. Support
@@ -142,10 +179,14 @@ ANSWER_MATCH_THRESHOLD = 0.75
 CANDIDATE_CROSS_CATEGORY_THRESHOLD = 0.55
 MATCH_CROSS_CATEGORY_THRESHOLD = 0.50
 
-# How many entries at most are folded into one list of possible causes.
-# Beyond this the group is merged as usual: a list of six causes is unreadable
-# and usually means the candidate thresholds are too low.
-MAX_VARIANTS_PER_ENTRY = 4
+# Word limit of a list of causes grows with the number of causes: each cause
+# may take this many words on top of the MAX_VARIANTS_ANSWER_WORDS floor.
+MAX_ANSWER_WORDS_PER_CAUSE = 150
+
+# A group with more different causes than this is left as separate entries:
+# such a list is unreadable and usually means the candidate thresholds are
+# too low.
+MAX_CAUSES_PER_ENTRY = 8
 
 # ----- Merge strategy ------------------------------------------------------
 
@@ -184,45 +225,12 @@ EXTRA_COLUMN_WIDTH = 22
 
 HEADER_FILL_COLOR = "D9E1F2"
 
-# ----- Base deduplication by embeddings (dedupe_base_embeddings.py) --------
+# ----- Base deduplication (dedupe_base.py) ---------------------------------
 
-# Where question embeddings come from:
-#   "gigachat" — the embeddings model of the GigaChat endpoint (best recall);
-#   "none"     — no embeddings at all: candidates come from question trigrams
-#                only, with the low TRIGRAM_ONLY_CANDIDATE_THRESHOLD below.
-#                Use while access to the embeddings model is not granted yet.
-EMBEDDING_BACKEND: Literal["gigachat", "none"] = "gigachat"
-
-# Embeddings model served by the same GigaChat endpoint. "EmbeddingsGigaR" is
-# the stronger one; fall back to "Embeddings" if the endpoint has no GigaR.
-GIGACHAT_EMBEDDINGS_MODEL = "EmbeddingsGigaR"
-
-# Trigram threshold used when EMBEDDING_BACKEND is "none". Much lower than
-# CANDIDATE_THRESHOLD: paraphrased duplicates share few letters, and without
-# embeddings this is the only signal. Expect several thousand model calls on
-# a base of a few hundred entries; a missed pair is a duplicate kept forever.
+# Trigram threshold of the base deduplication when EMBEDDING_BACKEND is
+# "none". Much lower than CANDIDATE_THRESHOLD: paraphrased duplicates share
+# few letters, and without embeddings this is the only signal. Expect several
+# thousand model calls on a base of a few hundred entries; a missed pair is a
+# duplicate kept forever. The pipeline keeps its usual thresholds: a batch
+# of thousands of tickets would not survive this one.
 TRIGRAM_ONLY_CANDIDATE_THRESHOLD = 0.20
-
-# Questions per embeddings request.
-EMBEDDING_BATCH_SIZE = 50
-
-# A pair goes to the model when the cosine similarity of the question
-# embeddings reaches this value. Kept moderate: a false candidate costs one
-# model call, a missed one leaves a duplicate in the base.
-EMBEDDING_CANDIDATE_THRESHOLD = 0.80
-
-# At most this many nearest neighbours per entry are considered, so a generic
-# question does not pull half of the base into the candidate list.
-EMBEDDING_TOP_K = 8
-
-# Output budget for the merge model: a list of several causes is longer than
-# the chat default in GIGACHAT_MAX_TOKENS allows.
-BASE_MERGE_MAX_TOKENS = 4000
-
-# Word limit of a list of causes grows with the number of causes: each cause
-# may take this many words on top of the MAX_VARIANTS_ANSWER_WORDS floor.
-MAX_ANSWER_WORDS_PER_CAUSE = 150
-
-# A group with more different causes than this is left as separate entries:
-# such a list is unreadable and usually means the candidate threshold is too low.
-MAX_CAUSES_PER_ENTRY = 8

@@ -25,7 +25,7 @@ make setup          # venv + uv + requirements.txt (PYTHON and SBEROSC_TOKEN fro
 source activate.sh  # activate the venv with the same environment as the Makefile
 make inspect        # check a new dump's column names/samples against config.py
 make run            # full pipeline run under caffeinate (network calls die when the Mac sleeps)
-make dedupe-base    # deduplicate the living base by question embeddings
+make dedupe-base    # deduplicate the living base by question embeddings and trigrams
 make help           # every target
 ```
 
@@ -92,27 +92,31 @@ the Excel export once at the end:
    `config.CATEGORIES`). A pair failing the filter is written to `rejected.json` with a reason
    instead of being dropped silently.
 2. **`deduplicate.py`** — collapses duplicates within one batch. `matching.py` finds _candidate_
-   pairs cheaply via local trigram/Jaccard similarity over questions and, separately, over answers
-   (support often pastes the same instruction under different reported symptoms, so answer
-   similarity is its own signal) — no LLM call is made for pairs that don't clear this bar. Each
-   candidate pair is then judged by the LLM as `same` (merge), `alternatives` (kept as a list of
-   possible causes), or `contradiction` (kept separate, logged as a warning). Groups form around a
-   representative entry — a pair only joins a group if the LLM confirmed it against the group's
-   representative specifically; similarity is **not transitive**.
-3. **`merge.py`** — merges the deduplicated batch into the living base (one-to-one matching, again
-   by trigrams). On a matched entry with differing answers `config.MERGE_STRATEGY` decides:
-   `"accumulate"` appends the new cause, `"replace"` lets the fresh answer win. Answers that say the
-   same thing, or contradict each other, are always replaced by the fresh one.
+   pairs cheaply from three local signals, united: cosine similarity of GigaChat question
+   embeddings (the only signal that sees a paraphrase; `EMBEDDING_BACKEND = "none"` turns it
+   off), trigram/Jaccard similarity over questions and, separately, over answers (support often
+   pastes the same instruction under different reported symptoms, so answer similarity is its own
+   signal) — no LLM call is made for pairs that don't clear this bar. Each candidate pair is then
+   judged by the LLM as `same` (merge), `alternatives` (kept as a list of possible causes), or
+   `contradiction` (kept separate, logged as a warning). Groups form around a representative
+   entry — a pair only joins a group if the LLM confirmed it against the group's representative
+   specifically; similarity is **not transitive**. A group is merged in two steps
+   (`deduplicate.merge_group`): `same` answers collapse into one full answer first, then the
+   different causes that remain become one numbered list.
+3. **`merge.py`** — merges the deduplicated batch into the living base (one-to-one matching, by
+   the same three signals). On a matched entry with differing answers `config.MERGE_STRATEGY`
+   decides: `"accumulate"` appends the new cause, `"replace"` lets the fresh answer win. Answers
+   that say the same thing, or contradict each other, are always replaced by the fresh one.
 4. **`export.py`** — rebuilds `data/knowledge_base.xlsx` from the JSON base (frozen header row,
    autofilter, one column per `config.SOURCE_EXTRA_COLUMNS` entry).
 
-**`dedupe_base_embeddings.py`** (`make dedupe-base`) is run by hand, outside the pipeline: it
-compares the entries already in the base against each other, which the pipeline never does.
-Candidates come from cosine similarity of GigaChat question embeddings plus question trigrams,
-categories ignored; `EMBEDDING_BACKEND = "none"` falls back to trigrams only. A group is merged in
-two steps: `same` answers collapse into one, then different causes become one list. Its caches in
-`data/staging/base_dedupe_embeddings/` are keyed by content, not by position. `dedupe_base.py` is
-its trigram-only predecessor.
+**`dedupe_base.py`** (`make dedupe-base`) is run by hand, outside the pipeline: it compares the
+entries already in the base against each other, which the pipeline never does (and one-to-one
+matching leaves a second duplicate in the base untouched). Candidates come from question
+embeddings plus question trigrams, categories ignored; without embeddings the trigram threshold
+drops to `TRIGRAM_ONLY_CANDIDATE_THRESHOLD`. The rest is `deduplicate.collapse_duplicates`, the
+same judge-group-merge flow the pipeline runs on a batch. Its verdict cache lives in
+`data/staging/base_dedupe/`.
 
 ### Guardrails on LLM output
 
@@ -120,17 +124,21 @@ Every generated entry is validated in code, not trusted (`common.validate_entry`
 one of `config.CATEGORIES`, question/answer must respect word-count limits, and — the main check —
 every number in the rewritten answer must appear in the source text
 (`common.find_invented_numbers`). A merged "list of causes" answer must also be at least as long as
-the longest source answer it merges (`deduplicate.validate_merged`). A failed check never destroys
-data: a group with different causes is left unmerged, a group of identical answers keeps the
-representative with its own sources.
+the longest source answer it merges (`deduplicate.validate_merged`); its word limit grows with the
+number of causes (`MAX_ANSWER_WORDS_PER_CAUSE`). A failed check never destroys data: a group with
+different causes is left as separate entries, a cluster of identical answers keeps its most
+detailed entry with the provenance of all of them.
 
 ### Resumability
 
 Per-dump state lives in `data/staging/<dump-stem>-<hash-prefix>/` (`common.staging_dir_for`, keyed
 by content hash so a corrected dump doesn't collide with the original): `extract.py` skips rows
-already in that dump's `extracted.json`; `deduplicate.py` reuses verdicts from `verdicts.json`
-(`deduplicate.VerdictCache`). The base is copied to `data/backups/` before every write; writes are
-atomic (temp file + `os.replace`, `common.save_json`).
+already in that dump's `extracted.json` (rows that _failed_ rather than got rejected are retried —
+a failure is not a verdict); `deduplicate.py` reuses verdicts from `verdicts.json` and `merge.py`
+from `match_verdicts.json` (`deduplicate.VerdictCache`, keyed by the content hashes of the two
+entries, never by their positions). Question embeddings are cached once for every step in
+`data/staging/embeddings.npz`, keyed by question text. The base is copied to `data/backups/`
+before every write; writes are atomic (temp file + `os.replace`, `common.save_json`).
 
 ### Domain configuration
 
@@ -141,7 +149,9 @@ to the model), `QUESTION_COLUMNS` / `ANSWER_COLUMNS` (joined with `COLUMN_SEPARA
 `make inspect`). Deduplication thresholds: question ones (`CANDIDATE_THRESHOLD`, `MATCH_THRESHOLD`)
 are deliberately low — a false candidate costs one LLM call, a missed one leaves a permanent
 duplicate; the `ANSWER_*` ones are deliberately high — shared boilerplate must not merge unrelated
-problems; `*_CROSS_CATEGORY_THRESHOLD` gates comparisons across model-assigned categories.
+problems; `*_CROSS_CATEGORY_THRESHOLD` gates comparisons across model-assigned categories;
+`EMBEDDING_CANDIDATE_THRESHOLD` / `EMBEDDING_TOP_K` bound the embedding signal, and
+`EMBEDDING_BACKEND = "none"` runs on trigrams alone while the embeddings model is unavailable.
 
 ### Shared infrastructure (`common.py`)
 
@@ -149,8 +159,10 @@ Atomic JSON load/save; `ProgressBar`/`ProgressAwareHandler` (one-line bar on a t
 lines otherwise); `render_prompt` does literal `<<KEY>>` substitution — not `str.format`, because
 templates contain literal `{` `}` from JSON examples; `invoke_json` calls the LLM, parses a JSON
 object from the reply, retries with backoff and waits on `wait_for_network` when the GigaChat host
-drops; `merge_sources` / `merge_source_columns` keep provenance when tickets collapse into one
-entry.
+drops; `build_llm(max_tokens)` / `build_embedder` / `embed_texts` are the only places that
+construct GigaChat clients (merges pass `MERGE_MAX_TOKENS`); `hash_text` / `hash_entry` are the
+content keys of every cache; `merge_sources` / `merge_source_columns` keep provenance when tickets
+collapse into one entry.
 
 ## Data layout (git-ignored)
 

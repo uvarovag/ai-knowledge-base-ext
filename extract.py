@@ -19,7 +19,6 @@ skipped, so a crash near the end of a large dump does not cost the whole run.
 
 from __future__ import annotations
 
-import threading
 from collections.abc import Sequence
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass, field
@@ -367,10 +366,15 @@ class Statistics:
         self.rejection_reasons[reason] = self.rejection_reasons.get(reason, 0) + 1
         if reason.startswith("filter:"):
             self.rejected_by_filter += 1
-        elif reason.endswith("_failed") or reason == "unhandled_error":
+        elif is_failure(reason):
             self.failed += 1
         else:
             self.rejected_by_validation += 1
+
+
+def is_failure(reason: str) -> bool:
+    """Tell a pair the pipeline could not process from one the model rejected."""
+    return reason.endswith("_failed") or reason == "unhandled_error"
 
 
 # ----- Loading -------------------------------------------------------------
@@ -453,10 +457,16 @@ def load_completed(
 
     Returns the entries and rejections written so far, the source rows they
     cover, and the statistics rebuilt from them, so the final summary describes
-    the whole dump rather than only the resumed part.
+    the whole dump rather than only the resumed part. Rows that failed rather
+    than got rejected (the model never gave a usable reply) are dropped from
+    the rejections and processed again: a failure is not a verdict.
     """
     entries = common.load_json(extracted_path)
-    rejected = common.load_json(rejected_path)
+    rejected = [
+        record
+        for record in common.load_json(rejected_path)
+        if not is_failure(record.get("reason", "unknown"))
+    ]
     statistics = Statistics()
     processed_rows: set[int] = set()
 
@@ -616,7 +626,6 @@ def run(dump_path: Path, staging_dir: Path) -> Path:
 
     source_file = dump_path.name
     llm = common.build_llm()
-    save_lock = threading.Lock()
     completed = 0
     bar = common.ProgressBar(len(pending), f"Extract {dump_path.name}")
 
@@ -625,6 +634,8 @@ def run(dump_path: Path, staging_dir: Path) -> Path:
         common.save_json(extracted_path, entries)
         common.save_json(rejected_path, rejected)
 
+    # Only the workers run in parallel; every result is folded in here, on the
+    # main thread, so the lists need no lock.
     with ThreadPoolExecutor(max_workers=config.WORKER_COUNT) as executor:
         futures = {
             executor.submit(process_pair, llm, pair, source_file): pair
@@ -639,30 +650,29 @@ def run(dump_path: Path, staging_dir: Path) -> Path:
                 logger.error("Row %d: unhandled error: %s", pair.row_number, error)
                 outcome = PairOutcome(pair=pair, rejection_reason="unhandled_error")
 
-            with save_lock:
-                if outcome.entry is not None:
-                    entries.append(outcome.entry)
-                    statistics.accepted += 1
-                    if outcome.had_private_data:
-                        statistics.private_data_seen += 1
-                    bar.advance(accepted=1)
-                else:
-                    reason = outcome.rejection_reason or "unknown"
-                    rejected.append(
-                        {
-                            "source_row": pair.row_number,
-                            "reason": reason,
-                            "topic": outcome.topic,
-                            "question": pair.question,
-                            "answer": pair.answer,
-                        }
-                    )
-                    statistics.register(reason)
-                    bar.advance(rejected=1)
+            if outcome.entry is not None:
+                entries.append(outcome.entry)
+                statistics.accepted += 1
+                if outcome.had_private_data:
+                    statistics.private_data_seen += 1
+                bar.advance(accepted=1)
+            else:
+                reason = outcome.rejection_reason or "unknown"
+                rejected.append(
+                    {
+                        "source_row": pair.row_number,
+                        "reason": reason,
+                        "topic": outcome.topic,
+                        "question": pair.question,
+                        "answer": pair.answer,
+                    }
+                )
+                statistics.register(reason)
+                bar.advance(rejected=1)
 
-                completed += 1
-                if completed % config.SAVE_EVERY == 0:
-                    save_progress()
+            completed += 1
+            if completed % config.SAVE_EVERY == 0:
+                save_progress()
 
     bar.finish()
 
