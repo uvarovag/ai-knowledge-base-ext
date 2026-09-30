@@ -20,5 +20,8 @@ if [ -n "${SBEROSC_TOKEN}" ]; then
 fi
 export UV_HTTP_TIMEOUT=90
 export UV_CACHE_DIR=.uv-cache
+# System certificate store instead of uv's bundle, see the note in the Makefile.
+export UV_NATIVE_TLS=1
+export UV_INSECURE_HOST="sberosc.sigma.sbrf.ru"
 
 echo "✅ venv activated, uv environment variables set"

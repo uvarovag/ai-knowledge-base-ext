@@ -12,8 +12,16 @@ define SETUP_ENV
 		export UV_DEFAULT_INDEX="$${PIP_INDEX_URL}"; \
 	fi && \
 	export UV_HTTP_TIMEOUT=90 && \
-	export UV_CACHE_DIR=.uv-cache
+	export UV_CACHE_DIR=.uv-cache && \
+	export UV_NATIVE_TLS=1 && \
+	export UV_INSECURE_HOST="sberosc.sigma.sbrf.ru"
 endef
+
+# UV_NATIVE_TLS makes uv trust the system certificate store instead of its own bundle: the
+# corporate SSL_CERT_FILE is a GOST .cer that uv cannot parse, so with the bundle every mirror
+# request fails with "invalid peer certificate: UnknownIssuer". UV_INSECURE_HOST covers the
+# mirror when the store lacks the root as well. Same as [tool.uv] system-certs and
+# allow-insecure-host of a pyproject.toml, which this repo has none.
 
 .PHONY: help setup run inspect dedupe-base clean dump dump-diff
 
