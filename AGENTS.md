@@ -23,7 +23,7 @@ for Excel. Input: Excel with columns configured in `config.py`. Output: `data/kn
 ```bash
 make setup          # venv + uv + requirements.txt (PYTHON and SBEROSC_TOKEN from .env, see .env.example)
 source activate.sh  # activate the venv with the same environment as the Makefile
-make inspect        # check a new dump's column names/samples against config.py
+make inspect        # check a new dump's columns against config.py and that GigaChat and embeddings answer
 make run            # full pipeline run under caffeinate (network calls die when the Mac sleeps)
 make dedupe-base    # deduplicate the living base by question embeddings and trigrams
 make help           # every target
