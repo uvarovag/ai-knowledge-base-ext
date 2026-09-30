@@ -62,7 +62,9 @@ words: `HtmlParser`, `parse_html`, never `HTMLParser`. Settings in `config.py` a
 
 **Russian** (the model and the reviewers read it — don't "fix" it): every prompt and every text
 the model reads (`CATEGORIES` descriptions, `DOMAIN_NAME`, docstrings and field descriptions of
-the structured output schemas), and `README.md`, which is for people.
+the structured output schemas), and `README.md`, which is for people. Every prompt opens with the
+model's role («Ты — сортировщик …», «Ты — редактор …») and carries few-shot examples, taken from
+real tickets where possible.
 
 ### Comments and docstrings
 
@@ -162,7 +164,9 @@ templates contain literal `{` `}` from JSON examples; `invoke_structured` calls 
 structured output (function calling against a Pydantic schema: `common.Entry`, and a verdict schema
 next to each prompt; docstrings and field descriptions are Russian, the model reads them), retries
 any failure — a GigaChat error, a failed validation, a reply without the function call — with
-backoff and waits on `wait_for_network` when the GigaChat host drops; `build_llm(max_tokens)` / `build_embedder` / `embed_texts` are the only places that
+backoff and waits on `wait_for_network` when the GigaChat host drops; a failed attempt is logged
+with the model's raw reply (`describe_reply`); `configure_logging` also appends every warning and
+error to `data/errors.log`; `build_llm(max_tokens)` / `build_embedder` / `embed_texts` are the only places that
 construct GigaChat clients (merges pass `MERGE_MAX_TOKENS`); `hash_text` / `hash_entry` are the
 content keys of every cache; `merge_sources` / `merge_source_columns` keep provenance when tickets
 collapse into one entry.
@@ -170,7 +174,8 @@ collapse into one entry.
 ## Data layout (git-ignored)
 
 `data/`: `knowledge_base.json` / `.xlsx` (the live base and its view), `processed_dumps.json`
-(ledger of processed dump hashes), `rejected.json` (filtered-out pairs with reasons),
-`staging/` (resumable intermediate state), `backups/` (pre-write snapshots of the base). The dumps
+(ledger of processed dump hashes), `errors.log` (warnings and errors of every run),
+`staging/` (resumable intermediate state; `staging/<dump>/rejected.json` holds the filtered-out
+pairs with reasons), `backups/` (pre-write snapshots of the base). The dumps
 contain real tickets: never commit them or anything under `data/`. GigaChat mTLS certificates live
 in `.gigachat/` (`client-cert.pem`, `client-cert.key`).

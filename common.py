@@ -165,17 +165,36 @@ class ProgressAwareHandler(logging.StreamHandler):
 
 
 def configure_logging() -> None:
-    """Set up the single logging format used by every step of the pipeline."""
-    handler = ProgressAwareHandler(sys.stderr)
-    handler.setFormatter(
+    """Set up the single logging format used by every step of the pipeline.
+
+    Warnings and errors also go to config.ERROR_LOG, appended across runs: a
+    failed model call scrolls away among thousands of progress lines, and the
+    file is what tells why a row ended up as filter_failed.
+    """
+    console_handler = ProgressAwareHandler(sys.stderr)
+    console_handler.setFormatter(
         logging.Formatter(
             fmt="%(asctime)s | %(levelname)-7s | %(message)s",
             datefmt="%H:%M:%S",
         )
     )
+
+    config.ERROR_LOG.parent.mkdir(parents=True, exist_ok=True)
+    error_handler = logging.FileHandler(config.ERROR_LOG, encoding="utf-8")
+    error_handler.setLevel(logging.WARNING)
+    error_handler.setFormatter(
+        logging.Formatter(
+            fmt="%(asctime)s | %(levelname)-7s | %(module)s | %(message)s",
+            datefmt="%Y-%m-%d %H:%M:%S",
+        )
+    )
+
     root = logging.getLogger()
+    for handler in root.handlers:
+        handler.close()
     root.handlers.clear()
-    root.addHandler(handler)
+    root.addHandler(console_handler)
+    root.addHandler(error_handler)
     root.setLevel(logging.INFO)
 
 
@@ -394,6 +413,17 @@ class Entry(BaseModel):
     answer: str = Field(description="Ответ")
 
 
+def describe_reply(reply: Any) -> str:
+    """Summarize a raw model reply for the error log: finish reason, calls, text."""
+    metadata = getattr(reply, "response_metadata", {}) or {}
+    content = str(getattr(reply, "content", ""))
+    return (
+        f"finish_reason={metadata.get('finish_reason')}, "
+        f"tool_calls={getattr(reply, 'tool_calls', None)}, "
+        f"content={content[:500]!r}"
+    )
+
+
 def invoke_structured(
     llm: GigaChat,
     system_prompt: str,
@@ -411,22 +441,31 @@ def invoke_structured(
 
     Returns None if every attempt fails. The label identifies the item in logs.
     """
-    structured_llm = llm.with_structured_output(schema, method="function_calling")
+    # include_raw keeps the model's reply next to the parsed result, so a
+    # failure is logged with what the model actually said.
+    structured_llm = llm.with_structured_output(
+        schema, method="function_calling", include_raw=True
+    )
     messages = [("system", system_prompt), ("user", user_prompt)]
 
     for attempt in range(1, config.MAX_RETRIES + 1):
         wait_for_network()
         try:
             result = structured_llm.invoke(messages)
-            if result is None:
-                raise ValueError("Model did not call the function")
-            return result.model_dump()
+            if result["parsed"] is None:
+                parsing_error = result["parsing_error"] or "none made"
+                raise ValueError(
+                    f"no valid function call ({parsing_error}); "
+                    f"{describe_reply(result['raw'])}"
+                )
+            return result["parsed"].model_dump()
         except Exception as error:
             logger.warning(
-                "%s: attempt %d/%d failed: %s",
+                "%s: attempt %d/%d failed: %s: %s",
                 label,
                 attempt,
                 config.MAX_RETRIES,
+                type(error).__name__,
                 error,
             )
             if attempt < config.MAX_RETRIES:

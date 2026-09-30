@@ -30,6 +30,9 @@ BACKUP_DIR = DATA_DIR / "backups"
 # gets the same vector.
 EMBEDDINGS_CACHE = STAGING_DIR / "embeddings.npz"
 
+# Warnings and errors of every run, appended: why a model call failed.
+ERROR_LOG = DATA_DIR / "errors.log"
+
 KNOWLEDGE_BASE_JSON = DATA_DIR / "knowledge_base.json"
 KNOWLEDGE_BASE_XLSX = DATA_DIR / "knowledge_base.xlsx"
 PROCESSED_DUMPS_JSON = DATA_DIR / "processed_dumps.json"
