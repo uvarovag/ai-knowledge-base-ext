@@ -40,7 +40,7 @@ from typing import Any, Literal
 from pydantic import BaseModel, Field
 
 import config
-from kb.utils import gigachat, logs, prompts, storage
+from kb.utils import gigachat, links, logs, prompts, storage
 from kb.utils.entries import Entry, merge_sources, merged_entry, validate_entry
 from kb.utils.logs import logger
 
@@ -203,6 +203,8 @@ MERGE_SYSTEM_PROMPT_TEMPLATE = """Ты — редактор базы знани�
 Не сокращай и не выбрасывай детали. Вместо этого возьми ответ самой полной
 записи и верни его без изменений. Полнота важнее длины.
 
+<<LINKS_RULE>>
+
 <<WRITING_STYLE>>
 
 ЗАПРЕЩЕНО
@@ -263,6 +265,8 @@ MERGE_VARIANTS_SYSTEM_PROMPT_TEMPLATE = """Ты — редактор базы з
 Не выбрасывай пункты и не сокращай их до неузнаваемости. Оставь все пункты,
 убрав только повторы между ними. Полнота важнее длины.
 
+<<LINKS_RULE>>
+
 <<WRITING_STYLE>>
 
 ЗАПРЕЩЕНО
@@ -307,6 +311,7 @@ MERGE_SYSTEM_PROMPT = prompts.render_prompt(
     question_words=config.QUESTION_WORDS_TARGET,
     answer_words=config.ANSWER_WORDS_TARGET,
     writing_style=prompts.WRITING_STYLE,
+    links_rule=prompts.LINKS_RULE,
 )
 
 MERGE_VARIANTS_SYSTEM_PROMPT = prompts.render_prompt(
@@ -316,6 +321,7 @@ MERGE_VARIANTS_SYSTEM_PROMPT = prompts.render_prompt(
     question_words=config.QUESTION_WORDS_TARGET,
     answer_words=config.VARIANTS_ANSWER_WORDS_TARGET,
     writing_style=prompts.WRITING_STYLE,
+    links_rule=prompts.LINKS_RULE,
 )
 
 # ----- Verdict cache -------------------------------------------------------
@@ -632,16 +638,24 @@ def merge_entries(
     With as_variants the answers are folded into a numbered list of variants;
     otherwise they are merged into a single answer.
     """
+    masked, link_map = links.mask_links(
+        [text for entry in group_entries for text in (entry["question"], entry["answer"])]
+    )
+    masked_entries = [
+        {"question": question, "answer": answer}
+        for question, answer in zip(masked[::2], masked[1::2])
+    ]
     merged = gigachat.invoke_structured(
         llm,
         MERGE_VARIANTS_SYSTEM_PROMPT if as_variants else MERGE_SYSTEM_PROMPT,
-        MERGE_USER_PROMPT.format(entries=format_entries(group_entries)),
+        MERGE_USER_PROMPT.format(entries=format_entries(masked_entries)),
         schema=Entry,
         label=label,
     )
     if merged is None:
         logger.warning("%s: merge failed", label)
         return None
+    links.unmask_links(merged, link_map)
 
     rejection_reason = validate_merged(merged, group_entries, as_variants)
     if rejection_reason is not None:

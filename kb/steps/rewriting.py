@@ -5,7 +5,7 @@ from __future__ import annotations
 from typing import Any
 
 import config
-from kb.utils import gigachat, prompts
+from kb.utils import gigachat, links, prompts
 from kb.utils.entries import Entry
 from kb.utils.excel import SourcePair
 
@@ -62,8 +62,8 @@ TRANSFORM_SYSTEM_PROMPT_TEMPLATE = """Ты — редактор базы зна�
 3. Убери реплики из переписки: «пришлите скриншот», «сообщите результат».
 4. Пиши нейтральную инструкцию или факт.
 5. Если действий несколько — пронумерованные шаги, одно действие в шаге.
-6. Названия разделов, вкладок, кнопок, полей, шаблонов, пути в настройках и
-   ссылки на инструкции и шаблоны копируй дословно, включая кавычки и символ «>».
+6. Названия разделов, вкладок, кнопок, полей, шаблонов и пути в настройках
+   копируй дословно, включая кавычки и символ «>».
 7. Сохрани все условия и оговорки: «только в статусе Черновик»,
    «для этого браузера».
 8. УДАЛИ ИЗ ОТВЕТА ФИО, телефоны, почту, логины конкретных учётных записей,
@@ -75,6 +75,8 @@ TRANSFORM_SYSTEM_PROMPT_TEMPLATE = """Ты — редактор базы зна�
    без цифр («логин начинается на V_») оставь — они относятся к правилу, а
    не к одному пользователю.
 9. Не более <<ANSWER_WORDS>> слов.
+
+<<LINKS_RULE>>
 
 <<WRITING_STYLE>>
 
@@ -120,10 +122,10 @@ TRANSFORM_SYSTEM_PROMPT_TEMPLATE = """Ты — редактор базы зна�
 Ответ: Добрый день! Для согласования актов нужна роль 723 «Диспетчер». Оформите запрос на неё в личном кабинете администратора, после назначения роли кнопка станет активной.
 {"category": "access", "question": "Почему неактивна кнопка согласования акта?", "answer": "Для согласования актов требуется роль 723 «Диспетчер». Оформите запрос на роль в личном кабинете администратора — после её назначения кнопка станет активной."}
 
-ПРИМЕР 5 — убран номер закупки, ссылка на шаблон оставлена дословно
+ПРИМЕР 5 — убран номер закупки, метка ссылки перенесена как есть
 Вопрос: Коллеги, добрый день! по ЗП 8310000769 (опрос рынка RFI_0000002378-3), меняла УЛ, протокол УЛ подписан, но не создается СПС - подскажите, что дожать нужно?
-Ответ: 1. Зайти в закупочную процедуру и нажать на кнопку "Создать СпС"; 2. Если кнопка отсутствует - создать обращение в поддержку Друга по шаблону https://sberfriend.sberbank.ru/sberfriend/#/application/C03B0B8268524DBDAAB11EE916A5A701
-{"category": "troubleshooting", "question": "Что делать, если после подписания протокола УЛ не создаётся СпС?", "answer": "1. Откройте закупочную процедуру и нажмите кнопку «Создать СпС». 2. Если кнопки нет, создайте обращение в поддержку ДРУГ по шаблону https://sberfriend.sberbank.ru/sberfriend/#/application/C03B0B8268524DBDAAB11EE916A5A701"}
+Ответ: 1. Зайти в закупочную процедуру и нажать на кнопку "Создать СпС"; 2. Если кнопка отсутствует - создать обращение в поддержку Друга по шаблону [ссылка-1]
+{"category": "troubleshooting", "question": "Что делать, если после подписания протокола УЛ не создаётся СпС?", "answer": "1. Откройте закупочную процедуру и нажмите кнопку «Создать СпС». 2. Если кнопки нет, создайте обращение в поддержку ДРУГ по шаблону [ссылка-1]"}
 
 ПРИМЕР 6 — убрано приветствие, отсылка к роли сохранена
 Вопрос: Хочу новый стул
@@ -162,6 +164,7 @@ TRANSFORM_SYSTEM_PROMPT = prompts.render_prompt(
     question_words=config.QUESTION_WORDS_TARGET,
     answer_words=config.ANSWER_WORDS_TARGET,
     writing_style=prompts.WRITING_STYLE,
+    links_rule=prompts.LINKS_RULE,
 )
 
 # ----- Rewriting -----------------------------------------------------------
@@ -169,10 +172,12 @@ TRANSFORM_SYSTEM_PROMPT = prompts.render_prompt(
 
 def run_transform(llm: Any, pair: SourcePair) -> dict[str, Any] | None:
     """Rewrite a pair into a canonical entry; None if the model failed."""
-    return gigachat.invoke_structured(
+    (question, answer), link_map = links.mask_links([pair.question, pair.answer])
+    reply = gigachat.invoke_structured(
         llm,
         TRANSFORM_SYSTEM_PROMPT,
-        TRANSFORM_USER_PROMPT.format(question=pair.question, answer=pair.answer),
+        TRANSFORM_USER_PROMPT.format(question=question, answer=answer),
         schema=Entry,
         label=f"row {pair.row_number} transform",
     )
+    return None if reply is None else links.unmask_links(reply, link_map)

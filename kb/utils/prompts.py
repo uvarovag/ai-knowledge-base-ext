@@ -25,6 +25,14 @@ WRITING_STYLE = """СТИЛЬ ТЕКСТА — «Пиши, сокращай» (�
 сервис-менеджеру»."""
 
 
+# Links of the source reach the model as placeholders (kb/utils/links.py):
+# every prompt that writes an answer tells it to move them, not to write links.
+LINKS_RULE = """ССЫЛКИ
+Ссылки в записях заменены метками вида [ссылка-1]. Переноси метку в ответ как
+есть, туда, где нужна ссылка. Саму ссылку не пиши, метки не меняй и новых не
+придумывай."""
+
+
 def render_prompt(template: str, **values: str | int) -> str:
     """Substitute <<KEY>> placeholders in a prompt template.
 

@@ -73,7 +73,11 @@ the structured output schemas), and `README.md`, which is for people. Every prom
 model's role («Ты — сортировщик …», «Ты — редактор …») and carries few-shot examples, taken from
 real tickets where possible. Every prompt that writes a question or an answer of the base includes
 the one shared style block `prompts.WRITING_STYLE` (Ilyakhov's «Пиши, сокращай») through the
-`<<WRITING_STYLE>>` placeholder — change the style there, never per prompt.
+`<<WRITING_STYLE>>` placeholder — change the style there, never per prompt. The model never
+writes a link: GigaChat cannot copy a long percent-encoded one. Before every call that writes text
+(`rewriting`, `repairing`, `dedup.merge_entries`) the links of the source become placeholders
+(`links.mask_links`, «[ссылка-1]»), the prompt tells the model to move them (`prompts.LINKS_RULE`),
+and `links.unmask_links` puts the exact source links back; prompt examples show placeholders too.
 
 ### Comments and docstrings
 
@@ -98,7 +102,8 @@ column 79, no `=`, no boxes:
 - **`kb/utils/`** — infrastructure with no knowledge base logic: `logs` (logger, `ProgressBar`,
   `configure_logging`), `storage` (atomic JSON, backups, content hashes, `staging_dir_for`),
   `gigachat` (clients, `invoke_structured`, embeddings, network wait), `prompts`
-  (`render_prompt`), `entries` (the `Entry` schema, `validate_entry`, provenance, `new_entry` /
+  (`render_prompt`, the shared `WRITING_STYLE` and `LINKS_RULE` blocks), `links` (link
+  placeholders), `entries` (the `Entry` schema, `validate_entry`, provenance, `new_entry` /
   `merged_entry`), `excel` (`read_pairs` from any sheet by configured columns, `write_knowledge_base`,
   `write_rejected`), `batch` (`process_rows`: resumable parallel row processing into entries and
   rejections).
@@ -167,7 +172,8 @@ every link in the rewritten answer must be verbatim in the source (`entries.find
 "fixed" encoded link or one copied from a prompt example leads nowhere), and every number must
 appear in the source question or answer (`entries.find_invented_numbers`; links and list markers are
 left out, a number word in the source such as «десять» counts as its digits, leading zeros are
-ignored). A merged "list of causes" answer must also be at least as long
+ignored, a two-digit year written out as «2026» counts as «26»); a placeholder left over from an
+unknown link rejects the entry. A merged "list of causes" answer must also be at least as long
 as the longest source answer it merges (`dedup.validate_merged`); its word limit grows with the
 number of causes (`MAX_ANSWER_WORDS_PER_CAUSE`). A failed check never destroys data: a group with
 different causes is left as separate entries, a cluster of identical answers keeps its most

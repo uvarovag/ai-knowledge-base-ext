@@ -8,7 +8,7 @@ from typing import Any, Literal
 from pydantic import BaseModel, Field
 
 import config
-from kb.utils import storage
+from kb.utils import links, storage
 
 # Schemas the model fills through function calling: their docstrings and field
 # descriptions are sent to the model, so they are written in Russian.
@@ -35,13 +35,6 @@ LIST_MARKER_PATTERN = re.compile(
 )
 
 
-# Links are checked whole (find_invented_links) and left out of the number
-# check: the digits of an encoded link are not facts, and a list marker right
-# after a link would not follow a sentence end. A link is replaced by a period
-# so that such a marker still reads as one.
-URL_PATTERN = re.compile(r"https?://[^\s«»\"<>]+")
-URL_TRAILING_PUNCTUATION = ".,;:!?)"
-
 # Number words a rewrite may turn into digits ("через десять дней" → "через 10
 # дней"): the digits count as present in the source when the word is there.
 NUMBER_WORDS: dict[str, str] = {
@@ -61,13 +54,6 @@ NUMBER_WORDS: dict[str, str] = {
 WORD_PATTERN = re.compile(r"[а-яё]+")
 
 
-def find_links(text: str) -> list[str]:
-    """Return the links of a text, without the punctuation that ends a sentence."""
-    return [
-        link.rstrip(URL_TRAILING_PUNCTUATION) for link in URL_PATTERN.findall(text)
-    ]
-
-
 def find_invented_links(rewritten_answer: str, source_text: str) -> list[str]:
     """Return links of the rewritten answer that are not verbatim in the source.
 
@@ -75,7 +61,7 @@ def find_invented_links(rewritten_answer: str, source_text: str) -> list[str]:
     prompt example, produces a link that leads nowhere.
     """
     return [
-        link for link in find_links(rewritten_answer) if link not in source_text
+        link for link in links.find_links(rewritten_answer) if link not in source_text
     ]
 
 
@@ -84,7 +70,10 @@ def find_invented_numbers(rewritten_answer: str, source_text: str) -> list[str]:
 
     Links and step numbering are stripped first, so neither is flagged.
     """
-    without_links = URL_PATTERN.sub(".", rewritten_answer)
+    # Links are checked whole by find_invented_links: the digits of an encoded
+    # link are not facts. A link becomes a period, so a list marker right after
+    # it still follows a sentence end.
+    without_links = links.URL_PATTERN.sub(".", rewritten_answer)
     without_markers = LIST_MARKER_PATTERN.sub("", without_links)
     # "03 квартал" and "3 квартал" are one number: compare without leading zeros.
     source_numbers = {
@@ -100,7 +89,17 @@ def find_invented_numbers(rewritten_answer: str, source_text: str) -> list[str]:
         for number in NUMBER_PATTERN.findall(without_markers)
         if len(number) >= config.MIN_CHECKED_NUMBER_LENGTH
         and (number.lstrip("0") or "0") not in source_numbers
+        and not is_expanded_year(number, source_numbers)
     ]
+
+
+def is_expanded_year(number: str, source_numbers: set[str]) -> bool:
+    """Tell a two-digit year written out in full: "26 года" → "2026 года"."""
+    return (
+        len(number) == 4
+        and number.startswith("20")
+        and (number[2:].lstrip("0") or "0") in source_numbers
+    )
 
 
 def validate_entry(
@@ -141,6 +140,8 @@ def validate_entry(
     invented_links = find_invented_links(answer, source_text)
     if invented_links:
         return f"invented_links:{','.join(invented_links)}"
+    if links.PLACEHOLDER_PATTERN.search(question + " " + answer):
+        return "unknown_link_placeholder"
 
     invented_numbers = find_invented_numbers(answer, source_text)
     if invented_numbers:
