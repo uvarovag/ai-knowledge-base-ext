@@ -2,22 +2,21 @@
 .venv/
 env/
 venv/
-data/
-.gigachat/
 
 # Cache for tools and Python
 __pycache__/
 *.py[cod]
-.pytest_cache/
-.mypy_cache/
-.ruff_cache/
 .uv-cache/
 
 # Secrets and certificates (DO NOT commit)
 .env
 *.pem
 *.crt
-.gigachat/*
+*.key
+.gigachat/
+
+# Pipeline output: the knowledge base, staging, backups, rejected pairs
+data/
 
 # IDE (VS Code)
 .vscode/
@@ -37,3 +36,7 @@ Thumbs.db
 *.log
 log/
 tmp/
+
+# AI assistant local config (per-developer, never committed)
+.claude/
+CLAUDE.md

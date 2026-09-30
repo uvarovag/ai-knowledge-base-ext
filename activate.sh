@@ -1,53 +1,24 @@
 #!/bin/bash
-# Использование: source activate.sh
+# Usage: source activate.sh
+# After this you can run python pipeline.py, uv pip install, etc. directly.
+# Exports the same variables as SETUP_ENV in the Makefile; keep the two in step.
+
+if [ ! -f .venv/bin/activate ]; then
+    echo "❌ .venv not found — run \`make setup\` first"
+    return 1 2>/dev/null || exit 1
+fi
+
+source .venv/bin/activate
 
 set -a
 [ -f .env ] && source .env
 set +a
 
-REQUIREMENTS="requirements.txt"
-STAMP_FILE=".venv/.requirements-hash"
-
-# 1. Проверяем, существует ли .venv
-if [ ! -d ".venv" ]; then
-    echo "⚙️  Venv not found. Creating..."
-    # Пробуем uv, если его нет — обычный python
-    if command -v uv &> /dev/null; then
-        uv venv
-    else
-        python3.13 -m venv .venv
-    fi
+if [ -n "${SBEROSC_TOKEN}" ]; then
+    export PIP_INDEX_URL="https://token:${SBEROSC_TOKEN}@sberosc.sigma.sbrf.ru/repo/pypi/simple"
+    export UV_DEFAULT_INDEX="${PIP_INDEX_URL}"
 fi
+export UV_HTTP_TIMEOUT=90
+export UV_CACHE_DIR=.uv-cache
 
-# 2. Активируем (важно: через source в текущем шелле)
-source .venv/bin/activate
-
-export PIP_CONFIG_FILE=./.pip/pip.conf
-
-# 3. Ставим зависимости, если requirements.txt изменился с прошлой установки
-if [ ! -f "$REQUIREMENTS" ]; then
-    echo "⚠️  $REQUIREMENTS not found, skipping dependency install"
-else
-    CURRENT_HASH=$(shasum -a 256 "$REQUIREMENTS" | cut -d' ' -f1)
-    SAVED_HASH=""
-    [ -f "$STAMP_FILE" ] && SAVED_HASH=$(cat "$STAMP_FILE")
-
-    if [ "$CURRENT_HASH" != "$SAVED_HASH" ]; then
-        echo "📦 Installing dependencies..."
-        if command -v uv &> /dev/null; then
-            uv pip install -r "$REQUIREMENTS"
-        else
-            pip install -r "$REQUIREMENTS"
-        fi
-
-        if [ $? -eq 0 ]; then
-            echo "$CURRENT_HASH" > "$STAMP_FILE"
-            echo "✅ dependencies installed"
-        else
-            echo "❌ Dependency installation failed"
-            echo "   Try: pip install -r $REQUIREMENTS"
-        fi
-    fi
-fi
-
-echo "✅ venv activated"
+echo "✅ venv activated, uv environment variables set"
