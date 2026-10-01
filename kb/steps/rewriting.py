@@ -173,11 +173,12 @@ TRANSFORM_SYSTEM_PROMPT = prompts.render_prompt(
 def run_transform(llm: Any, pair: SourcePair) -> dict[str, Any] | None:
     """Rewrite a pair into a canonical entry; None if the model failed."""
     (question, answer), link_map = links.mask_links([pair.question, pair.answer])
-    reply = gigachat.invoke_structured(
-        llm,
-        TRANSFORM_SYSTEM_PROMPT,
-        TRANSFORM_USER_PROMPT.format(question=question, answer=answer),
-        schema=Entry,
-        label=f"row {pair.row_number} transform",
+    user_prompt = TRANSFORM_USER_PROMPT.format(question=question, answer=answer)
+    label = f"row {pair.row_number} transform"
+    return links.ask_with_links(
+        lambda hint: gigachat.invoke_structured(
+            llm, TRANSFORM_SYSTEM_PROMPT, user_prompt + hint, schema=Entry, label=label
+        ),
+        link_map,
+        label,
     )
-    return None if reply is None else links.unmask_links(reply, link_map)

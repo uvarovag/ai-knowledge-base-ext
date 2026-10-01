@@ -645,17 +645,18 @@ def merge_entries(
         {"question": question, "answer": answer}
         for question, answer in zip(masked[::2], masked[1::2])
     ]
-    merged = gigachat.invoke_structured(
-        llm,
-        MERGE_VARIANTS_SYSTEM_PROMPT if as_variants else MERGE_SYSTEM_PROMPT,
-        MERGE_USER_PROMPT.format(entries=format_entries(masked_entries)),
-        schema=Entry,
-        label=label,
+    system_prompt = MERGE_VARIANTS_SYSTEM_PROMPT if as_variants else MERGE_SYSTEM_PROMPT
+    user_prompt = MERGE_USER_PROMPT.format(entries=format_entries(masked_entries))
+    merged = links.ask_with_links(
+        lambda hint: gigachat.invoke_structured(
+            llm, system_prompt, user_prompt + hint, schema=Entry, label=label
+        ),
+        link_map,
+        label,
     )
     if merged is None:
         logger.warning("%s: merge failed", label)
         return None
-    links.unmask_links(merged, link_map)
 
     rejection_reason = validate_merged(merged, group_entries, as_variants)
     if rejection_reason is not None:

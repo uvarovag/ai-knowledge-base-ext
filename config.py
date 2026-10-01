@@ -117,6 +117,11 @@ MAX_RETRIES = 10
 RATE_LIMIT_BASE_SECONDS = 10
 RATE_LIMIT_MAX_SECONDS = 120
 RATE_LIMIT_MAX_WAITS = 30
+
+# Links reach the model as placeholders («[ссылка-1]», kb/utils/links.py). A
+# reply with a placeholder the source did not have is asked again, told which
+# ones exist, up to this many calls in all.
+LINK_PLACEHOLDER_ATTEMPTS = 3
 RETRY_BACKOFF_SECONDS = 5
 NETWORK_CHECK_INTERVAL_SECONDS = 30
 SAVE_EVERY = 25

@@ -79,6 +79,9 @@ writes a link: GigaChat cannot copy a long percent-encoded one. Before every cal
 (`rewriting`, `repairing`, `dedup.merge_entries`) the links of the source become placeholders
 (`links.mask_links`, «[ссылка-1]»), the prompt tells the model to move them (`prompts.LINKS_RULE`),
 and `links.unmask_links` puts the exact source links back; prompt examples show placeholders too.
+A placeholder the model declines («по [ссылке-1]») is still recognised; one it made up is asked
+again with a hint naming the placeholders that exist (`links.ask_with_links`, up to
+`LINK_PLACEHOLDER_ATTEMPTS` calls in all) before the validation rejects the entry.
 
 ### Comments and docstrings
 
