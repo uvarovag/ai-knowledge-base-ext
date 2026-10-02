@@ -60,6 +60,16 @@ def inspect(path: Path) -> None:
 def check_models(source: Source, chat_check: ChatCheck) -> None:
     """Send the first pair of the source to the chat and embeddings models."""
     print("=== Model check ===")
+    certificates = {
+        "chat": (config.CERT_FILE, config.KEY_FILE),
+        "embeddings": (config.EMBEDDINGS_CERT_FILE, config.EMBEDDINGS_KEY_FILE),
+    }
+    missing = {
+        name: gigachat.missing_files(*files) for name, files in certificates.items()
+    }
+    for name, (cert_file, _) in certificates.items():
+        state = f"MISSING {', '.join(missing[name])}" if missing[name] else "found"
+        print(f"  Certificate of the {name} model {cert_file.name}: {state}")
     if not gigachat.is_network_alive():
         print(f"  GigaChat host unreachable: {config.GIGACHAT_BASE_URL}")
         print()
@@ -75,14 +85,17 @@ def check_models(source: Source, chat_check: ChatCheck) -> None:
         return
     print(f"  Row {pair.row_number}: {pair.question[:77]!r}")
 
-    reply = chat_check(gigachat.build_llm(), pair)
-    if reply is None:
-        print(f"  Chat model {config.GIGACHAT_MODEL_NAME}: FAILED, see warnings above")
+    if missing["chat"]:
+        print(f"  Chat model {config.GIGACHAT_MODEL_NAME}: skipped, no certificate")
+    elif (reply := chat_check(gigachat.build_llm(), pair)) is None:
+        print(f"  Chat model {config.GIGACHAT_MODEL_NAME}: FAILED, see the log file")
     else:
         print(f"  Chat model {config.GIGACHAT_MODEL_NAME}: OK, {reply}")
 
     if config.EMBEDDING_BACKEND == "none":
         print('  Embeddings: skipped, EMBEDDING_BACKEND = "none"')
+    elif missing["embeddings"]:
+        print(f"  Embeddings {config.GIGACHAT_EMBEDDINGS_MODEL}: skipped, no certificate")
     else:
         try:
             vectors = gigachat.embed_texts(gigachat.build_embedder(), [pair.question])

@@ -56,8 +56,8 @@ Configs in the repository: `configs/supplier-portal-sap.toml` (`make run`) and
 ```bash
 make setup          # venv + uv + requirements.txt (PYTHON and SBEROSC_TOKEN from .env, see .env.example)
 source activate.sh  # activate the venv with the same environment as the Makefile
-make inspect CONFIG=...      # check the source file of a run or repair config and that GigaChat and embeddings answer
-make models                  # list the models GigaChat makes available to the certificate
+make inspect CONFIG=...      # check the source file of a config, both certificates, and that the chat and embeddings models answer
+make models                  # list the models each certificate (chat, embeddings) is granted, marking the configured ones
 make run CONFIG=...          # scenario 1 under caffeinate (network calls die when the Mac sleeps)
 make dedupe-base CONFIG=...  # scenario 1 maintenance: deduplicate a base against itself
 make repair-base CONFIG=...  # scenario 2
@@ -252,7 +252,7 @@ is copied to `data/bases/<name>/backups/` before every write; writes are atomic 
 
 Retargeting at another support domain means a new TOML config, not code: `[domain]` and the
 columns of the source (question and answer columns joined with `config.COLUMN_SEPARATOR`;
-`extra_columns` copied per entry, a missing one is a warning — check with `make inspect`).
+`extra_columns` copied per entry, a missing one is skipped with a note — check with `make inspect`).
 Deduplication thresholds, in `config.py`: question ones (`CANDIDATE_THRESHOLD`,
 `MATCH_THRESHOLD`) are deliberately low — a false candidate costs one LLM call, a missed one leaves
 a permanent duplicate; the `ANSWER_*` ones are deliberately high — shared boilerplate must not merge
@@ -269,7 +269,8 @@ function call — uses one of `MAX_RETRIES` (10) attempts with a growing pause a
 model's raw reply (`describe_reply`); a 429 uses none — every thread of the process waits out one
 shared cooldown that doubles while 429s keep coming (`RATE_LIMIT_*`), so the process backs off as a
 whole; the host dropping is waited out by `wait_for_network`. The cooldown is per process: parallel
-runs share the server's limit, so lower `WORKER_COUNT` when they keep hitting it. The library's own 429 warnings are silenced, the pause is logged once.
+runs share the server's limit; `WORKER_COUNT` is 1 by default, raise it for speed while no 429s
+come. The library's own 429 warnings are silenced, the pause is logged once.
 
 Logging (`kb/utils/logs.py`): every entry point runs inside
 `logs.run(log_dir, command)`. The terminal gets this project's INFO lines (progress of the steps,
@@ -282,8 +283,9 @@ included, go to the run's own file `<work dir of the base>/logs/<command>_<time>
 the run ends, failed or interrupted too, it prints the model calls summed up by step and where the
 log file is. `call_with_retries(call, label, caller)` notes every attempt under `caller`
 (`logs.note_call`); `batch.process_rows` collects a row's calls with `logs.recording_calls`. Keep
-per-item problems out of the terminal's INFO: they are printed above the bar or logged as warnings. `gigachat.build_llm(max_tokens)` / `build_embedder` are the only places that
-construct GigaChat clients (merges pass `MERGE_MAX_TOKENS`); `storage.hash_text` / `hash_entry` are
+per-item problems out of the terminal's INFO: they are printed above the bar or logged as warnings. `gigachat.build_llm(max_tokens)` / `build_embedder` are the only places that construct GigaChat clients,
+each with its own certificate (`CERT_FILE` / `EMBEDDINGS_CERT_FILE`), and stop with the missing file
+named when it is not there (`require_certificate`) (merges pass `MERGE_MAX_TOKENS`); `storage.hash_text` / `hash_entry` are
 the content keys of every cache.
 
 ## Data layout (git-ignored)
@@ -296,4 +298,5 @@ reasons), `backups/` (pre-write snapshots of the base); `repairs/<name>/staging/
 `embeddings.npz`; `logs/` for `inspect` and `models`. `output/` — the Excel files
 of the committed configs. The input files contain real tickets: never commit them or anything
 under `data/` or `output/`. GigaChat mTLS certificates live
-in `.gigachat/` (`client-cert.pem`, `client-cert.key`).
+in `.gigachat/`: `glm.pem` / `glm.key` for the chat model (`CERT_FILE`, `KEY_FILE`), `gigachat.pem` /
+`gigachat.key` for the embeddings model (`EMBEDDINGS_CERT_FILE`, `EMBEDDINGS_KEY_FILE`).

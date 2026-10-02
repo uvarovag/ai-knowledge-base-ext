@@ -7,6 +7,7 @@ import socket
 import threading
 import time
 from collections.abc import Callable
+from pathlib import Path
 from typing import Any, TypeVar
 from urllib.parse import urlparse
 
@@ -161,12 +162,36 @@ def call_with_retries(
 # ----- Clients and calls ---------------------------------------------------
 
 
+def missing_files(*paths: Path) -> list[str]:
+    return [str(path) for path in paths if not path.is_file()]
+
+
+def require_certificate(cert_file: Path, key_file: Path, model: str) -> None:
+    """Stop with the missing file named, not with an SSL error at the first call."""
+    missing = missing_files(cert_file, key_file)
+    if missing:
+        raise SystemExit(f"Certificate of {model} not found: {', '.join(missing)}")
+
+
+def require_certificates() -> None:
+    """Check both certificates before a run: the embeddings one is needed only
+    hours in, at the first deduplication, unless EMBEDDING_BACKEND is "none"."""
+    require_certificate(config.CERT_FILE, config.KEY_FILE, config.GIGACHAT_MODEL_NAME)
+    if config.EMBEDDING_BACKEND != "none":
+        require_certificate(
+            config.EMBEDDINGS_CERT_FILE,
+            config.EMBEDDINGS_KEY_FILE,
+            config.GIGACHAT_EMBEDDINGS_MODEL,
+        )
+
+
 def build_llm(max_tokens: int = config.GIGACHAT_MAX_TOKENS) -> GigaChat:
     """Instantiate the GigaChat client with project defaults.
 
     Merging several entries into one needs a bigger output budget than the
     default, so the merge steps pass config.MERGE_MAX_TOKENS.
     """
+    require_certificate(config.CERT_FILE, config.KEY_FILE, config.GIGACHAT_MODEL_NAME)
     return GigaChat(
         model=config.GIGACHAT_MODEL_NAME,
         base_url=config.GIGACHAT_BASE_URL,
@@ -182,13 +207,18 @@ def build_llm(max_tokens: int = config.GIGACHAT_MAX_TOKENS) -> GigaChat:
 
 
 def build_embedder() -> GigaChatEmbeddings:
-    """Instantiate the embeddings client with the same endpoint and certificates."""
+    """Instantiate the embeddings client: the same endpoint, its own certificate."""
+    require_certificate(
+        config.EMBEDDINGS_CERT_FILE,
+        config.EMBEDDINGS_KEY_FILE,
+        config.GIGACHAT_EMBEDDINGS_MODEL,
+    )
     return GigaChatEmbeddings(
         model=config.GIGACHAT_EMBEDDINGS_MODEL,
         base_url=config.GIGACHAT_BASE_URL,
         verify_ssl_certs=config.GIGACHAT_VERIFY_SSL_CERTS,
-        cert_file=str(config.CERT_FILE),
-        key_file=str(config.KEY_FILE),
+        cert_file=str(config.EMBEDDINGS_CERT_FILE),
+        key_file=str(config.EMBEDDINGS_KEY_FILE),
         timeout=config.GIGACHAT_TIMEOUT_SECONDS,
     )
 

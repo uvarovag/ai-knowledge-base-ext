@@ -29,7 +29,7 @@ from pathlib import Path
 
 import config
 from kb.steps import dedup, matching
-from kb.utils import excel, logs, settings, storage
+from kb.utils import excel, gigachat, logs, settings, storage
 from kb.utils.logs import logger
 
 
@@ -39,6 +39,7 @@ def main() -> None:
     base = settings.load(settings.DedupeSettings, parser.parse_args().config)
 
     with logs.run(base.log_dir, "dedupe-base"):
+        gigachat.require_certificates()
         entries = storage.load_json(base.base_json)
         if not entries:
             logger.info(

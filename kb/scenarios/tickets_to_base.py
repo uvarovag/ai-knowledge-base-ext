@@ -27,7 +27,7 @@ from typing import Any
 
 import config
 from kb.steps import dedup, filtering, matching, merging, rewriting
-from kb.utils import batch, entries, excel, logs, settings, storage
+from kb.utils import batch, entries, excel, gigachat, logs, settings, storage
 from kb.utils.excel import SourcePair
 from kb.utils.logs import logger
 from kb.utils.settings import Domain, TicketsSettings
@@ -178,6 +178,7 @@ def main() -> None:
     base = settings.load(settings.TicketsSettings, parser.parse_args().config)
 
     with logs.run(base.log_dir, "run"):
+        gigachat.require_certificates()
         if not base.dump.path.exists():
             raise SystemExit(f"Dump not found: {base.dump.path}")
 

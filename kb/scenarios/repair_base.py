@@ -28,7 +28,7 @@ from typing import Any
 
 import config
 from kb.steps import dedup, matching, repairing
-from kb.utils import batch, entries, excel, logs, settings, storage
+from kb.utils import batch, entries, excel, gigachat, logs, settings, storage
 from kb.utils.excel import SourcePair
 from kb.utils.logs import logger
 from kb.utils.settings import Domain
@@ -72,6 +72,7 @@ def main() -> None:
     source = repair.input
 
     with logs.run(repair.log_dir, "repair-base"):
+        gigachat.require_certificates()
         if not source.path.exists():
             raise SystemExit(f"Base to repair not found: {source.path}")
         staging_dir = storage.staging_dir_for(source.path, repair.staging_dir)

@@ -51,9 +51,10 @@ FIRST_DATA_ROW = 2
 
 # ----- GigaChat ------------------------------------------------------------
 
-CERT_FILE = Path.cwd() / ".gigachat" / "client-cert.pem"
-KEY_FILE = Path.cwd() / ".gigachat" / "client-cert.key"
-GIGACHAT_MODEL_NAME = "GigaChat-3-Ultra"
+# mTLS certificate of the chat model.
+CERT_FILE = Path.cwd() / ".gigachat" / "glm.pem"
+KEY_FILE = Path.cwd() / ".gigachat" / "glm.key"
+GIGACHAT_MODEL_NAME = "glm-5.2"
 GIGACHAT_BASE_URL = "https://gigachat-ift.sberdevices.delta.sbrf.ru/v1"
 GIGACHAT_VERIFY_SSL_CERTS = False
 GIGACHAT_TIMEOUT_SECONDS = 180
@@ -68,10 +69,16 @@ MERGE_MAX_TOKENS = 4000
 # Embeddings model served by the same endpoint. "EmbeddingsGigaR" is the
 # stronger one; fall back to "Embeddings" if the endpoint has no GigaR.
 GIGACHAT_EMBEDDINGS_MODEL = "EmbeddingsGigaR"
+# Its own mTLS certificate: access to the embeddings model is granted apart
+# from the chat model's.
+EMBEDDINGS_CERT_FILE = Path.cwd() / ".gigachat" / "gigachat.pem"
+EMBEDDINGS_KEY_FILE = Path.cwd() / ".gigachat" / "gigachat.key"
 
 # ----- Runtime -------------------------------------------------------------
 
-WORKER_COUNT = 5
+# Model calls in flight at once. One by default: the endpoint's rate limit is
+# shared by every run; raise it for speed while no 429s come.
+WORKER_COUNT = 1
 # Attempts of every GigaChat call, chat and embeddings: a failed call loses a
 # row, while a retry only costs one more call and a wait.
 MAX_RETRIES = 10
@@ -79,8 +86,7 @@ MAX_RETRIES = 10
 # A 429 "Too many requests" does not use up an attempt: every call of the
 # process pauses together, first for RATE_LIMIT_BASE_SECONDS, doubling while
 # 429s keep coming, up to RATE_LIMIT_MAX_SECONDS. A call gives up after
-# RATE_LIMIT_MAX_WAITS such pauses. Parallel runs share the server's limit:
-# lower WORKER_COUNT when two terminals keep hitting it.
+# RATE_LIMIT_MAX_WAITS such pauses. Parallel runs share the server's limit.
 RATE_LIMIT_BASE_SECONDS = 10
 RATE_LIMIT_MAX_SECONDS = 120
 RATE_LIMIT_MAX_WAITS = 30
