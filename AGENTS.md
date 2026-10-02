@@ -33,8 +33,8 @@ Two levels, never mixed:
 
 - **`config.py`** — technical settings shared by every run: GigaChat, retries, workers,
   thresholds, word limits, Excel styling, and the storage: `KNOWLEDGE_BASES_DIR`
-  (`/Users/19480633/Desktop/Базы знаний`, the working folder: «Базы» — the Excel files of the bases,
-  `output_dir` of every config; «Обращения» — the dumps) and in it `DATA_DIR`
+  (`/Users/19480633/Desktop/Базы знаний`, the working folder: «Обращения» — the dumps; «Готовые базы» — the bases, every Excel file the
+  runs write, `output_dir` of every config) and in it `DATA_DIR`
   («Технические данные»: `BASES_DIR`, `REPAIRS_DIR`, `EMBEDDINGS_CACHE`, `TOOLS_LOG_DIR`).
 - **A TOML config per run** (`configs/`), the only command-line argument of every script
   (`make <target> CONFIG=...`). It holds only what that script needs, and its files are Excel
@@ -57,12 +57,12 @@ identified by `name` only: any dump in `[dump].path` updates the base of that na
 the `settings.Domain` passed explicitly; prompts and the category enum of the schemas are
 built from it per call.
 
-Configs in the repository, all with `output_dir` set to `KNOWLEDGE_BASES_DIR/Базы`: for the base
+Configs in the repository, all with `output_dir` set to `KNOWLEDGE_BASES_DIR/Готовые базы`: for the base
 «Портал поставщика SAP» `configs/supplier-portal-sap.toml` (`make run`, dump
 `Обращения/Обращения ПП.xlsx`), `configs/supplier-portal-sap-merge.toml` (`make merge-base`,
-the source path an example), `configs/supplier-portal-sap-dedupe.toml` (`make dedupe-base`);
-`configs/obespechka-repair.toml` and `configs/procs-repair.toml` (`make repair-base` of the poor
-bases «Обеспечка агент ЦС 01.10» and «ПроЦС в Агент ЦС 01.10» in «Базы»).
+the source path an example), `configs/supplier-portal-sap-dedupe.toml` (`make dedupe-base`). A
+base made elsewhere becomes a living base once its file is named `<name>_<YYYY-MM-DD>.xlsx` and
+has this project's columns (`excel.read_knowledge_base`); otherwise repair it first.
 
 ## Commands
 
@@ -323,7 +323,7 @@ the content keys of every cache.
 
 ## Data layout (outside the repository)
 
-`KNOWLEDGE_BASES_DIR/Базы` holds the Excel files of every base (`<name>_<date>.xlsx`, a repair's
+`KNOWLEDGE_BASES_DIR/Готовые базы` holds the Excel files of every base (`<name>_<date>.xlsx`, a repair's
 `<name>_<date>_rejected.xlsx`) and `DATA_DIR` («Технические данные», technical state only):
 `bases/<name>/` — `knowledge_base.json` (follows the newest Excel of the base), `processed_dumps.json` (ledger of the hashes of merged dumps and bases), `staging/`
 (resumable intermediate state; `staging/<source>/rejected.json` holds the left-out rows with

@@ -16,9 +16,9 @@ FORCE_REPROCESS = False
 
 # ----- Technical storage ---------------------------------------------------
 
-# One working folder: «Базы» holds the Excel files of the bases (output_dir of
-# the TOML configs), «Обращения» the dumps of tickets, and «Технические данные»
-# everything the runs keep for themselves.
+# One working folder: «Обращения» holds the dumps of tickets, «Готовые базы»
+# the bases — every Excel file the runs write (output_dir of the TOML
+# configs) — and «Технические данные» everything the runs keep for themselves.
 KNOWLEDGE_BASES_DIR = Path("/Users/19480633/Desktop/Базы знаний")
 DATA_DIR = KNOWLEDGE_BASES_DIR / "Технические данные"
 
