@@ -7,7 +7,7 @@
 name = "Портал поставщика SAP"
 
 # Folder the Excel view of the base is written to.
-output_dir = "/Users/19480633/Desktop/Базы знаний"
+output_dir = "/Users/19480633/Desktop/Базы занний/Базы"
 
 # An entry of the good base answers a question already in this base with a
 # DIFFERENT cause:
@@ -16,10 +16,11 @@ output_dir = "/Users/19480633/Desktop/Базы знаний"
 # Answers that say the same thing or contradict each other are always replaced.
 merge_strategy = "accumulate"
 
-# The good base: an Excel file this project wrote (make run, make repair-base).
-# A file already merged into the base (same content) is skipped.
+# The good base: an Excel file this project wrote (make run, make repair-base);
+# replace the example with the file to merge. A file already merged into the
+# base (same content) is skipped.
 [source]
-path = "/Users/19480633/Desktop/Базы знаний/Хорошая база_2026-10-02.xlsx"
+path = "/Users/19480633/Desktop/Базы занний/Базы/Хорошая база_2026-10-02.xlsx"
 
 # What the model is told about the domain.
 [domain]

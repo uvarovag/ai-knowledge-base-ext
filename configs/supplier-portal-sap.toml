@@ -8,7 +8,7 @@
 name = "Портал поставщика SAP"
 
 # Folder the Excel view of the base is written to.
-output_dir = "/Users/19480633/Desktop/Базы знаний"
+output_dir = "/Users/19480633/Desktop/Базы занний/Базы"
 
 # A fresh entry answers a question already in the base with a DIFFERENT cause:
 #   "accumulate" — keep both causes as a numbered list of possible causes;
@@ -19,7 +19,7 @@ merge_strategy = "accumulate"
 # The dump of tickets. A dump already merged into the base (same content) is
 # skipped. Check the column names with make inspect.
 [dump]
-path = "~/Desktop/Обращения ПП.xlsx"
+path = "/Users/19480633/Desktop/Базы занний/Обращения/Обращения ПП.xlsx"
 # Joined into the question and the answer of one pair.
 question_columns = ["Описания обращения"]
 answer_columns = ["Решение"]

@@ -16,10 +16,10 @@ FORCE_REPROCESS = False
 
 # ----- Technical storage ---------------------------------------------------
 
-# Every base lives in one folder: its Excel files, written where output_dir of
-# the TOML config says, and, in a subfolder, everything the runs keep for
-# themselves.
-KNOWLEDGE_BASES_DIR = Path("/Users/19480633/Desktop/Базы знаний")
+# One working folder: «Базы» holds the Excel files of the bases (output_dir of
+# the TOML configs), «Обращения» the dumps of tickets, and «Технические данные»
+# everything the runs keep for themselves.
+KNOWLEDGE_BASES_DIR = Path("/Users/19480633/Desktop/Базы занний")
 DATA_DIR = KNOWLEDGE_BASES_DIR / "Технические данные"
 
 # One directory per base, named in its TOML config: the base JSON (the source

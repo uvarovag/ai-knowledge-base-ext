@@ -1,17 +1,25 @@
-# make dedupe-base CONFIG=configs/supplier-portal-sap-dedupe.toml —
-# deduplicate the base against itself.
+# make repair-base CONFIG=configs/procs-repair.toml — repair the poor base
+# «ПроЦС в Агент ЦС 01.10.xlsx» into a good one. Check its columns first: make inspect CONFIG=...
 
-# The base to clean, in «Технические данные/bases/<name>/». Also the start of
-# the output file name: <name>_<date>.xlsx.
-name = "Портал поставщика SAP"
+# Name of the repaired base: the output files are <name>_<date>.xlsx and
+# <name>_<date>_rejected.xlsx; its technical state lives in
+# «Технические данные/repairs/<name>/».
+name = "ПроЦС в Агент ЦС"
 
-# Folder the Excel view of the cleaned base is written to.
+# Folder the repaired base and the rows left out are written to.
 output_dir = "/Users/19480633/Desktop/Базы занний/Базы"
+
+# The base to repair: the first sheet holds a question and an answer per row.
+[input]
+path = "/Users/19480633/Desktop/Базы занний/Базы/ПроЦС в Агент ЦС 01.10.xlsx"
+question_columns = ["Вопрос"]
+answer_columns = ["Ответ"]
+extra_columns = []
 
 # What the model is told about the domain.
 [domain]
 # Substituted into every prompt: «служба поддержки <name>».
-name = "портала поставщика SAP"
+name = "Центра снабжения и офисных сервисов"
 
 # Categories offered to the model: the key is stored in the entry, the value is
 # shown to the model as its description.
