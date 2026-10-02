@@ -108,6 +108,19 @@ class TicketsSettings(RunSettings):
     dump: Source
 
 
+class BaseSource(StrictModel):
+    """The Excel file of a good base, written by this project (make run or repair-base)."""
+
+    path: ExcelPath
+
+
+class MergeBaseSettings(RunSettings):
+    """make merge-base: merge a good base into the base."""
+
+    merge_strategy: MergeStrategy
+    source: BaseSource
+
+
 class DedupeSettings(RunSettings):
     """make dedupe-base: deduplicate the base against itself."""
 

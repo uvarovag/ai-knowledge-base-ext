@@ -1,12 +1,25 @@
-# make dedupe-base CONFIG=configs/supplier-portal-sap-dedupe.toml —
-# deduplicate the base against itself.
+# make merge-base CONFIG=configs/supplier-portal-sap-merge.toml — merge a good
+# base into this base. A poor base is repaired first (make repair-base), then
+# its result is merged.
 
-# The base to clean, in «Технические данные/bases/<name>/». Also the start of
-# the output file name: <name>_<date>.xlsx.
+# The base to merge into, in «Технические данные/bases/<name>/». Also the start
+# of the output file name: <name>_<date>.xlsx.
 name = "Портал поставщика SAP"
 
-# Folder the Excel view of the cleaned base is written to.
+# Folder the Excel view of the base is written to.
 output_dir = "/Users/19480633/Desktop/Базы знаний"
+
+# An entry of the good base answers a question already in this base with a
+# DIFFERENT cause:
+#   "accumulate" — keep both causes as a numbered list of possible causes;
+#   "replace"    — the merged answer wins, the old one is dropped.
+# Answers that say the same thing or contradict each other are always replaced.
+merge_strategy = "accumulate"
+
+# The good base: an Excel file this project wrote (make run, make repair-base).
+# A file already merged into the base (same content) is skipped.
+[source]
+path = "/Users/19480633/Desktop/Базы знаний/Хорошая база_2026-10-02.xlsx"
 
 # What the model is told about the domain.
 [domain]

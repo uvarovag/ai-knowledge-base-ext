@@ -16,9 +16,11 @@ FORCE_REPROCESS = False
 
 # ----- Technical storage ---------------------------------------------------
 
-# Everything a run keeps for itself; the files people read are written where
-# the TOML config of the run says.
-DATA_DIR = Path.cwd() / "data"
+# Every base lives in one folder: its Excel files, written where output_dir of
+# the TOML config says, and, in a subfolder, everything the runs keep for
+# themselves.
+KNOWLEDGE_BASES_DIR = Path("/Users/19480633/Desktop/Базы знаний")
+DATA_DIR = KNOWLEDGE_BASES_DIR / "Технические данные"
 
 # One directory per base, named in its TOML config: the base JSON (the source
 # of truth), the ledger of processed dumps, staging, backups.
@@ -60,11 +62,14 @@ GIGACHAT_VERIFY_SSL_CERTS = False
 GIGACHAT_TIMEOUT_SECONDS = 180
 GIGACHAT_TEMPERATURE = 0.0
 GIGACHAT_TOP_P = 0.1
-GIGACHAT_MAX_TOKENS = 1500
+# Output budget of one reply. A reasoning model (glm-5.x, Qwen3.5) spends it on
+# its thinking too, and a reply cut off by the budget is a broken function
+# call, retried and finally lost: unused budget costs nothing.
+GIGACHAT_MAX_TOKENS = 4000
 
 # Output budget of the model when it merges entries: a list of several causes
 # is longer than the chat default above allows.
-MERGE_MAX_TOKENS = 4000
+MERGE_MAX_TOKENS = 8000
 
 # Embeddings model served by the same endpoint. "EmbeddingsGigaR" is the
 # stronger one; fall back to "Embeddings" if the endpoint has no GigaR.
@@ -198,7 +203,7 @@ MAX_CAUSES_PER_ENTRY = 8
 # larger output budget than GIGACHAT_MAX_TOKENS to write them: a reply cut off
 # by the budget is a broken function call, retried and finally lost.
 REPAIR_MAX_ANSWER_WORDS = 500
-REPAIR_MAX_TOKENS = 4000
+REPAIR_MAX_TOKENS = 8000
 
 # ----- Excel export --------------------------------------------------------
 

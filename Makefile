@@ -23,7 +23,7 @@ endef
 # mirror when the store lacks the root as well. Same as [tool.uv] system-certs and
 # allow-insecure-host of a pyproject.toml, which this repo has none.
 
-.PHONY: help setup inspect models run dedupe-base repair-base clean dump dump-diff
+.PHONY: help setup inspect models run merge-base dedupe-base repair-base clean dump dump-diff
 
 help: ## Show this help menu
 	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) | sed 's/^.*Makefile://' | awk 'BEGIN {FS = ":.*?## "}; {printf "\033[36m%-15s\033[0m %s\n", $$1, $$2}'
@@ -46,9 +46,13 @@ models: ## List the models GigaChat makes available to the certificate
 	@$(SETUP_ENV) && python -m kb.tools.list_models
 
 # caffeinate keeps the Mac awake for hours-long runs: network calls die when it sleeps.
-run: ## Scenario 1: update the base of a config from its dump. Usage: make run CONFIG=...
+run: ## Scenario 1: create or update the base of a config from its dump. Usage: make run CONFIG=...
 	$(REQUIRE_CONFIG)
 	@$(SETUP_ENV) && caffeinate -is python -m kb.scenarios.tickets_to_base "$(CONFIG)"
+
+merge-base: ## Merge a good base (Excel this project wrote) into a base. Usage: make merge-base CONFIG=...
+	$(REQUIRE_CONFIG)
+	@$(SETUP_ENV) && caffeinate -is python -m kb.scenarios.merge_base "$(CONFIG)"
 
 dedupe-base: ## Scenario 1 maintenance: deduplicate a base. Usage: make dedupe-base CONFIG=...
 	$(REQUIRE_CONFIG)

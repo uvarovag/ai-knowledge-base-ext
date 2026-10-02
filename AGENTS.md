@@ -14,20 +14,27 @@ Guidance for AI coding agents (Claude Code, GigaCode, any other) working in this
 ## Overview
 
 Builds and maintains a support knowledge base with GigaChat. Python 3.13, `langchain-gigachat`,
-pandas/openpyxl for Excel. Two scenarios, each one make target:
+pandas/openpyxl for Excel. Each scenario is one make target:
 
-1. **Tickets to base** (`make run`) — grows a living base from an Excel dump of support
-   tickets.
-2. **Repair a base** (`make repair-base`) — turns a poor base (an Excel sheet of questions and
-   answers) into a good one, plus a sheet of the rows left out and why.
+1. **Tickets to base** (`make run`) — creates a living base from an Excel dump of support
+   tickets, or updates it from the next dump.
+2. **Merge a base** (`make merge-base`) — merges a good base (an Excel this project wrote) into
+   a living base.
+3. **Repair a base** (`make repair-base`) — turns a poor base (an Excel sheet of questions and
+   answers) into a good, separate one, plus a sheet of the rows left out and why. A poor base is
+   never merged as is: repair it, then merge the result.
+
+People review and edit the Excel files of a base; the JSON in the technical storage follows them
+(`living_base.sync_from_excel`, see "Living base files").
 
 ## Configuration
 
 Two levels, never mixed:
 
 - **`config.py`** — technical settings shared by every run: GigaChat, retries, workers,
-  thresholds, word limits, Excel styling, and the technical storage (`DATA_DIR`,
-  `BASES_DIR`, `REPAIRS_DIR`, `EMBEDDINGS_CACHE`, `TOOLS_LOG_DIR`).
+  thresholds, word limits, Excel styling, and the storage: `KNOWLEDGE_BASES_DIR`
+  (`/Users/19480633/Desktop/Базы знаний`, the folder of every base) and in it `DATA_DIR`
+  («Технические данные»: `BASES_DIR`, `REPAIRS_DIR`, `EMBEDDINGS_CACHE`, `TOOLS_LOG_DIR`).
 - **A TOML config per run** (`configs/`), the only command-line argument of every script
   (`make <target> CONFIG=...`). It holds only what that script needs, and its files are Excel
   only — people hand in and get back `.xlsx`, JSON is technical state. Read by
@@ -37,6 +44,8 @@ Two levels, never mixed:
     `[domain.categories]` (key stored in the entry → description shown to the model);
   - `TicketsSettings` (`make run`): `merge_strategy` and `[dump]` — one dump: `path`,
     `question_columns`, `answer_columns`, `extra_columns`;
+  - `MergeBaseSettings` (`make merge-base`): `merge_strategy` and `[source]` — `path` of the
+    good base's Excel; its columns are this project's own (`excel.read_knowledge_base`);
   - `DedupeSettings` (`make dedupe-base`): nothing more;
   - `RepairSettings` (`make repair-base`): `[input]` — the base to repair, same keys as
     `[dump]`.
@@ -47,9 +56,10 @@ identified by `name` only: any dump in `[dump].path` updates the base of that na
 the `settings.Domain` passed explicitly; prompts and the category enum of the schemas are
 built from it per call.
 
-Configs in the repository: `configs/supplier-portal-sap.toml` (`make run`) and
-`configs/supplier-portal-sap-dedupe.toml` (`make dedupe-base`) for the base «Портал
-поставщика SAP».
+Configs in the repository, for the base «Портал поставщика SAP», all with `output_dir` set to
+`KNOWLEDGE_BASES_DIR`: `configs/supplier-portal-sap.toml` (`make run`),
+`configs/supplier-portal-sap-merge.toml` (`make merge-base`),
+`configs/supplier-portal-sap-dedupe.toml` (`make dedupe-base`).
 
 ## Commands
 
@@ -59,6 +69,7 @@ source activate.sh  # activate the venv with the same environment as the Makefil
 make inspect CONFIG=...      # check the source file of a config, both certificates, and that the chat and embeddings models answer
 make models                  # list the models each certificate (chat, embeddings) is granted, marking the configured ones
 make run CONFIG=...          # scenario 1 under caffeinate (network calls die when the Mac sleeps)
+make merge-base CONFIG=...   # merge a good base into a base
 make dedupe-base CONFIG=...  # scenario 1 maintenance: deduplicate a base against itself
 make repair-base CONFIG=...  # scenario 2
 make help                    # every target
@@ -145,20 +156,22 @@ the runs. Everything else lives in `kb/`:
   `gigachat` (clients, `invoke_structured`, embeddings, network wait), `prompts`
   (`render_prompt`, the shared `WRITING_STYLE` and `LINKS_RULE` blocks), `links` (link
   placeholders), `entries` (the `Entry` schema, `validate_entry`, provenance, `new_entry` /
-  `merged_entry`), `excel` (`read_pairs` from any sheet by configured columns, `write_knowledge_base`,
-  `write_rejected`), `batch` (`process_rows`: resumable parallel row processing into entries and
+  `merged_entry`), `excel` (`read_pairs` from any sheet by configured columns,
+  `write_knowledge_base` and its inverse `read_knowledge_base`, `write_rejected`), `living_base`
+  (the files of a living base: sync from its newest Excel, save with a backup, export, the
+  ledger of merged files), `batch` (`process_rows`: resumable parallel row processing into entries and
   rejections), `parallel` (`workers`: the thread pool of every parallel step, whose queue an
   exception cancels).
 - **`kb/steps/`** — one transformation each, on lists of entries, with its prompt and schema:
   `filtering`, `rewriting`, `repairing`, `matching`, `dedup`, `merging`.
-- **`kb/scenarios/`** — entry points that compose the steps: `tickets_to_base`, `dedupe_base`,
-  `repair_base`. **`kb/tools/`** — `inspect_dump`, `list_models`.
+- **`kb/scenarios/`** — entry points that compose the steps: `tickets_to_base`, `merge_base`,
+  `dedupe_base`, `repair_base`. **`kb/tools/`** — `inspect_dump`, `list_models`.
 
 ## Scenario 1: tickets to base (`kb/scenarios/tickets_to_base.py`)
 
-Merges the dump of `[dump].path` into the base `name` (`data/bases/<name>/knowledge_base.json`),
-unless it is already in that base's `processed_dumps.json` (matched by file SHA-256), then
-writes the Excel view. Dumps are fed one run at a time, oldest to freshest — a later dump
+Syncs the base `name` from its newest Excel, merges the dump of `[dump].path` into it — the
+first dump creates the base — unless the dump is already in the base's `processed_dumps.json`
+(matched by file SHA-256), then writes today's Excel. Dumps are fed one run at a time, oldest to freshest — a later dump
 updates matching entries from earlier ones:
 
 1. **Filter and rewrite** (`filtering`, `rewriting`, run through `batch.process_rows`) — two LLM
@@ -183,7 +196,7 @@ updates matching entries from earlier ones:
    similarity is **not transitive**. A group is merged in two steps (`dedup.merge_group`): `same`
    answers collapse into one full answer first, then the different causes become one list.
 3. **Merge into the base** (`merging.merge_into_base`) — one-to-one matching by the same three
-   signals. `merging` works on lists; the scenario loads, backs up and saves the base. On a matched
+   signals. `merging` works on lists; the scenario syncs, saves and exports the base (`living_base`). On a matched
    entry with differing answers `merge_strategy` of the config decides:
    `"accumulate"` appends the new cause, `"replace"` lets the fresh answer win. Answers that say
    the same thing, or contradict each other, are always replaced by the fresh one. A cause the
@@ -193,7 +206,24 @@ updates matching entries from earlier ones:
 against each other, which scenario 1 never does (and one-to-one matching leaves a second duplicate
 untouched). Candidates come from question embeddings plus question trigrams, categories ignored;
 without embeddings the trigram threshold drops to `TRIGRAM_ONLY_CANDIDATE_THRESHOLD`. The rest is
-`dedup.collapse_duplicates`. Its verdict cache lives in `data/bases/<name>/staging/base_dedupe/`.
+`dedup.collapse_duplicates`. It syncs from the newest Excel first, like every scenario on a
+living base. Its verdict cache lives in `<base work dir>/staging/base_dedupe/`.
+
+**`merge_base`** (`make merge-base`) reads the good base with `excel.read_knowledge_base` — its
+entries are canonical already, so no filter, rewriting or in-batch dedup — marks doubtful an
+entry whose category the base does not have, and runs `merging.merge_into_base` into the synced
+base, as step 3 above. The source file goes into the same ledger as dumps; match verdicts are
+cached in `staging/<source stem>-<hash>/`.
+
+## Living base files (`kb/utils/living_base.py`)
+
+The Excel of a base holds every field of an entry (question, answer, category, doubt reason,
+source file and rows, update date, extra source columns), so `excel.read_knowledge_base` reads
+it back losslessly. Every scenario on a living base (`run`, `merge-base`, `dedupe-base`) starts
+with `sync_from_excel`: the newest `<output_dir>/<name>_<YYYY-MM-DD>.xlsx`, by the date in its
+name, becomes the base JSON when it was saved after the JSON (an older one was not edited since, and reading it back would undo a run that stopped before its export); the JSON is backed up first and written only when it differs, order ignored. So a
+row the reviewer deleted does not come back with the next dump, an edit stays, a cleared doubt
+reason confirms the entry, and an emptied question or answer drops the row.
 
 ## Scenario 2: repair a base (`kb/scenarios/repair_base.py`)
 
@@ -245,7 +275,7 @@ verdicts from `verdicts.json` and `merging` from `match_verdicts.json` (`dedup.V
 by the content hashes of the two entries, never by their positions). Rows and verdicts are saved
 every `SAVE_EVERY` items and on the way out, an interrupted run included. Question embeddings are cached
 once for every step and every base in `data/embeddings.npz`, keyed by question text. The base
-is copied to `data/bases/<name>/backups/` before every write; writes are atomic (temp file + `os.replace`,
+is copied to `<base work dir>/backups/` before every write; writes are atomic (temp file + `os.replace`,
 `storage.save_json`).
 
 ### Domain configuration
@@ -288,15 +318,15 @@ each with its own certificate (`CERT_FILE` / `EMBEDDINGS_CERT_FILE`), and stop w
 named when it is not there (`require_certificate`) (merges pass `MERGE_MAX_TOKENS`); `storage.hash_text` / `hash_entry` are
 the content keys of every cache.
 
-## Data layout (git-ignored)
+## Data layout (outside the repository)
 
-`data/` (`config.DATA_DIR`, technical state only): `bases/<name>/` — `knowledge_base.json` (the
-source of truth of a base), `processed_dumps.json` (ledger of processed dump hashes), `staging/`
+`KNOWLEDGE_BASES_DIR` holds the Excel files of every base (`<name>_<date>.xlsx`, a repair's
+`<name>_<date>_rejected.xlsx`) and `DATA_DIR` («Технические данные», technical state only):
+`bases/<name>/` — `knowledge_base.json` (follows the newest Excel of the base), `processed_dumps.json` (ledger of the hashes of merged dumps and bases), `staging/`
 (resumable intermediate state; `staging/<source>/rejected.json` holds the left-out rows with
 reasons), `backups/` (pre-write snapshots of the base); `repairs/<name>/staging/` (scenario 2);
 `logs/` under every base and repair (warnings and errors of each run, one file per run);
-`embeddings.npz`; `logs/` for `inspect` and `models`. `output/` — the Excel files
-of the committed configs. The input files contain real tickets: never commit them or anything
-under `data/` or `output/`. GigaChat mTLS certificates live
+`embeddings.npz`; `logs/` for `inspect` and `models`. All of it is outside the repository. The
+input files contain real tickets: never commit them, a base, or technical state. GigaChat mTLS certificates live
 in `.certs/`: `glm.pem` / `glm.key` for the chat model (`CERT_FILE`, `KEY_FILE`), `gigachat.pem` /
 `gigachat.key` for the embeddings model (`EMBEDDINGS_CERT_FILE`, `EMBEDDINGS_KEY_FILE`).

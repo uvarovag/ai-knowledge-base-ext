@@ -1,13 +1,14 @@
 # make run CONFIG=configs/supplier-portal-sap.toml — update the base from a
 # dump of tickets.
 
-# The base to update. Its technical state lives in data/bases/<name>/, so any
-# dump given below updates this same base. Also the start of the output file
-# name: <name>_<date>.xlsx.
+# The base to create or update. Its technical state lives in
+# «Технические данные/bases/<name>/», so any dump given below updates this
+# same base. Also the start of the output file name: <name>_<date>.xlsx, the
+# newest of which, with your edits, is read back before every run.
 name = "Портал поставщика SAP"
 
 # Folder the Excel view of the base is written to.
-output_dir = "output"
+output_dir = "/Users/19480633/Desktop/Базы знаний"
 
 # A fresh entry answers a question already in the base with a DIFFERENT cause:
 #   "accumulate" — keep both causes as a numbered list of possible causes;

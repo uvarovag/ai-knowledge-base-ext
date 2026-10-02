@@ -136,6 +136,55 @@ def write_sheet(
     workbook.save(path)
 
 
+def read_knowledge_base(path: Path) -> list[dict[str, Any]]:
+    """Read back a base this project wrote (write_knowledge_base), edits included.
+
+    The sheet holds every field of an entry, so a reviewer's edits — a row
+    deleted, a text corrected, a doubt reason cleared — become the entries.
+    Columns are found by their headers; every column besides config.HEADERS
+    is an extra source column. A row without a question or an answer is
+    dropped: the reviewer emptied it.
+    """
+    question, answer, category, doubtful, source_file, source_rows, updated = (
+        config.HEADERS
+    )
+    dataframe = pd.read_excel(path, sheet_name=0, dtype=str, keep_default_na=False)
+    missing = [column for column in (question, answer, category) if column not in dataframe]
+    if missing:
+        raise SystemExit(
+            f"{path.name} is not a base this project wrote: no columns {missing}. "
+            "Repair it first with make repair-base."
+        )
+    extra_columns = [column for column in dataframe.columns if column not in config.HEADERS]
+
+    def cell(row: pd.Series, column: str) -> str:
+        return str(row.get(column, "")).strip()
+
+    entries: list[dict[str, Any]] = []
+    for _, row in dataframe.iterrows():
+        if not cell(row, question) or not cell(row, answer):
+            continue
+        entry: dict[str, Any] = {
+            "category": cell(row, category),
+            "question": cell(row, question),
+            "answer": cell(row, answer),
+            "source_file": cell(row, source_file),
+            "source_rows": [
+                int(part)
+                for part in cell(row, source_rows).split(config.SOURCE_VALUE_SEPARATOR.strip())
+                if part.strip().isdigit()
+            ],
+            "source_columns": {
+                column: cell(row, column) for column in extra_columns if cell(row, column)
+            },
+            "updated_at": cell(row, updated),
+        }
+        if cell(row, doubtful):
+            entry["doubtful"] = cell(row, doubtful)
+        entries.append(entry)
+    return entries
+
+
 def write_knowledge_base(entries: list[dict[str, Any]], path: Path) -> None:
     """Write a base as a review-friendly sheet, sorted by category and question.
 

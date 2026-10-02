@@ -1,16 +1,18 @@
 """Scenario 1: grow a living knowledge base from a dump of support tickets.
 
 The TOML config names the base and the dump. The base is the one in
-config.BASES_DIR/<name>/ whatever the dump is called, so every new dump
-updates the same base. A dump already in the ledger of the base (matched by
-file content) is skipped. Otherwise:
+config.BASES_DIR/<name>/ whatever the dump is called, so the first dump
+creates it and every next one updates it. The newest Excel file of the base,
+with the reviewer's edits, becomes the base first (living_base). A dump
+already in the ledger of the base (matched by file content) is skipped.
+Otherwise:
 
 1. filter and rewrite every ticket into an entry (filtering, rewriting);
 2. collapse duplicates inside the batch (matching, dedup);
 3. merge the batch into the base (merging).
 
-The base JSON is the single source of truth; the Excel file written to the
-output folder of the config is only a view of it. An interrupted run resumes
+The Excel file written to the output folder is what people review and edit;
+the base JSON follows it. An interrupted run resumes
 from the staging directory of the dump: processed rows are skipped and
 verdicts already received are reused.
 
@@ -21,13 +23,12 @@ Usage:
 from __future__ import annotations
 
 import argparse
-from datetime import datetime
 from pathlib import Path
 from typing import Any
 
 import config
 from kb.steps import dedup, filtering, matching, merging, rewriting
-from kb.utils import batch, entries, excel, gigachat, logs, settings, storage
+from kb.utils import batch, entries, excel, gigachat, living_base, logs, settings, storage
 from kb.utils.excel import SourcePair
 from kb.utils.logs import logger
 from kb.utils.settings import Domain, TicketsSettings
@@ -102,8 +103,10 @@ def extract_entries(
     return extracted
 
 
-def process_dump(base: TicketsSettings, file_hash: str) -> None:
-    """Extract, deduplicate and merge the dump, then record it in the ledger."""
+def process_dump(
+    base: TicketsSettings, entries_of_base: list[dict[str, Any]], file_hash: str
+) -> list[dict[str, Any]]:
+    """Extract, deduplicate and merge the dump, record it in the ledger, return the base."""
     staging_dir = storage.staging_dir_for(base.dump.path, base.staging_dir)
     logger.info("=== %s -> base %s ===", base.dump.path.name, base.name)
 
@@ -123,50 +126,11 @@ def process_dump(base: TicketsSettings, file_hash: str) -> None:
     storage.save_json(staging_dir / "deduped.json", deduplicated)
 
     merged, updated, added = merging.merge_into_base(
-        base.domain,
-        base.merge_strategy,
-        storage.load_json(base.base_json),
-        deduplicated,
-        staging_dir,
+        base.domain, base.merge_strategy, entries_of_base, deduplicated, staging_dir
     )
-    backup_path = storage.backup_file(base.base_json, base.backup_dir)
-    if backup_path:
-        logger.info("Previous base backed up to %s", backup_path)
-    storage.save_json(base.base_json, merged)
-    register_dump(base, file_hash, updated, added)
-
-
-# ----- Ledger --------------------------------------------------------------
-
-
-def is_processed(base: TicketsSettings, file_hash: str) -> bool:
-    """Tell whether this very file has already been merged into the base."""
-    return any(
-        record["hash"] == file_hash
-        for record in storage.load_json(base.processed_dumps_json)
-    )
-
-
-def register_dump(
-    base: TicketsSettings, file_hash: str, updated: int, added: int
-) -> None:
-    """Record the processed dump in the ledger, replacing an earlier record of it."""
-    ledger = [
-        record
-        for record in storage.load_json(base.processed_dumps_json)
-        if record["hash"] != file_hash
-    ]
-    ledger.append(
-        {
-            "file": base.dump.path.name,
-            "path": str(base.dump.path),
-            "hash": file_hash,
-            "processed_at": datetime.now().isoformat(timespec="seconds"),
-            "updated": updated,
-            "added": added,
-        }
-    )
-    storage.save_json(base.processed_dumps_json, ledger)
+    living_base.save(base, merged)
+    living_base.register(base, base.dump.path, file_hash, updated, added)
+    return merged
 
 
 # ----- Entry point ---------------------------------------------------------
@@ -182,21 +146,17 @@ def main() -> None:
         if not base.dump.path.exists():
             raise SystemExit(f"Dump not found: {base.dump.path}")
 
+        entries_of_base = living_base.sync_from_excel(base)
         file_hash = storage.hash_file(base.dump.path)
-        if is_processed(base, file_hash) and not config.FORCE_REPROCESS:
+        if living_base.is_merged(base, file_hash) and not config.FORCE_REPROCESS:
             logger.info(
                 "%s is already in base %s, nothing to process",
                 base.dump.path.name,
                 base.name,
             )
         else:
-            process_dump(base, file_hash)
-
-        entries_of_base = storage.load_json(base.base_json)
-        if entries_of_base:
-            excel.write_knowledge_base(entries_of_base, base.output_file())
-        else:
-            logger.info("Knowledge base %s is empty, nothing to export", base.name)
+            entries_of_base = process_dump(base, entries_of_base, file_hash)
+        living_base.export(base, entries_of_base)
 
 
 if __name__ == "__main__":

@@ -17,8 +17,6 @@ __pycache__/
 
 # Technical storage of every base and run: JSON, staging, backups, caches
 data/
-# Excel files written for people (output_dir of the configs in configs/)
-output/
 
 # IDE (VS Code)
 .vscode/
