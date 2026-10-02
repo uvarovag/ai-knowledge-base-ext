@@ -23,12 +23,13 @@ from __future__ import annotations
 import os
 import re
 from collections import Counter, defaultdict
+from concurrent.futures import as_completed
 from typing import Any
 
 import numpy as np
 
 import config
-from kb.utils import gigachat, logs, storage
+from kb.utils import gigachat, logs, parallel, storage
 from kb.utils.logs import logger
 
 NON_WORD_PATTERN = re.compile(r"[^а-яёa-z0-9 ]+")
@@ -174,8 +175,9 @@ def save_embedding_cache(cache: dict[str, np.ndarray]) -> None:
 def embed_questions(entries: list[dict[str, Any]], label: str) -> np.ndarray | None:
     """Return one normalized question embedding per entry, or None without a backend.
 
-    Only questions missing from the cache are sent to the model; the cache is
-    written after every batch, so an interrupted run resumes where it stopped.
+    Only questions missing from the cache are sent to the model, in batches,
+    config.EMBEDDING_WORKER_COUNT at a time; the cache is written after every
+    batch, so an interrupted run resumes where it stopped.
     """
     if config.EMBEDDING_BACKEND == "none" or not entries:
         return None
@@ -203,12 +205,21 @@ def embed_questions(entries: list[dict[str, Any]], label: str) -> np.ndarray | N
             len(entries) - len(keys),
         )
         bar = logs.ProgressBar(len(batches), f"{label}: embedding questions")
-        for batch in batches:
-            vectors = gigachat.embed_texts(embedder, [pending[key] for key in batch])
-            for key, vector in zip(batch, vectors):
-                cache[key] = np.asarray(vector, dtype=np.float32)
-            save_embedding_cache(cache)
-            bar.advance(embedded=len(batch))
+        # Only the requests run in parallel; every result is folded into the
+        # cache here, on the main thread, so the cache needs no lock.
+        with parallel.workers(config.EMBEDDING_WORKER_COUNT) as executor:
+            futures = {
+                executor.submit(
+                    gigachat.embed_texts, embedder, [pending[key] for key in batch]
+                ): batch
+                for batch in batches
+            }
+            for future in as_completed(futures):
+                batch = futures[future]
+                for key, vector in zip(batch, future.result()):
+                    cache[key] = np.asarray(vector, dtype=np.float32)
+                save_embedding_cache(cache)
+                bar.advance(embedded=len(batch))
         bar.finish()
 
     matrix = np.stack([cache[key] for key in hashes]).astype(np.float32)

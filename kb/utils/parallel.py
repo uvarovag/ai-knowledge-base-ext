@@ -16,9 +16,10 @@ import config
 
 
 @contextmanager
-def workers() -> Iterator[ThreadPoolExecutor]:
-    """A pool of config.WORKER_COUNT threads whose queue an exception empties."""
-    with ThreadPoolExecutor(max_workers=config.WORKER_COUNT) as executor:
+def workers(count: int | None = None) -> Iterator[ThreadPoolExecutor]:
+    """A pool of count threads, config.WORKER_COUNT by default, whose queue an
+    exception empties."""
+    with ThreadPoolExecutor(max_workers=count or config.WORKER_COUNT) as executor:
         try:
             yield executor
         except BaseException:

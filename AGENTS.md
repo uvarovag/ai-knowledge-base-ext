@@ -70,7 +70,7 @@ has this project's columns (`excel.read_knowledge_base`); otherwise repair it fi
 make setup          # venv + uv + requirements.txt (PYTHON and SBEROSC_TOKEN from .env, see .env.example)
 source activate.sh  # activate the venv with the same environment as the Makefile
 make inspect CONFIG=...      # check the source file of a config, both certificates, and that the chat and embeddings models answer
-make models                  # list the models each certificate (chat, embeddings) is granted, marking the configured ones
+make models                  # list the models of each certificate (chat, embeddings), marking the configured ones, and measure how many calls at once each holds
 make run CONFIG=...          # scenario 1 under caffeinate (network calls die when the Mac sleeps)
 make merge-base CONFIG=...   # merge a good base into a base
 make dedupe-base CONFIG=...  # scenario 1 maintenance: deduplicate a base against itself
@@ -163,8 +163,9 @@ the runs. Everything else lives in `kb/`:
   `write_knowledge_base` and its inverse `read_knowledge_base`, `write_rejected`), `living_base`
   (the files of a living base: sync from its newest Excel, save with a backup, export, the
   ledger of merged files), `batch` (`process_rows`: resumable parallel row processing into entries and
-  rejections), `parallel` (`workers`: the thread pool of every parallel step, whose queue an
-  exception cancels).
+  rejections), `parallel` (`workers(count)`: the thread pool of every parallel step, `WORKER_COUNT` threads
+  by default, `EMBEDDING_WORKER_COUNT` for the embeddings batches; an exception cancels its
+  queue).
 - **`kb/steps/`** — one transformation each, on lists of entries, with its prompt and schema:
   `filtering`, `rewriting`, `repairing`, `matching`, `dedup`, `merging`.
 - **`kb/scenarios/`** — entry points that compose the steps: `tickets_to_base`, `merge_base`,
@@ -302,8 +303,10 @@ function call — uses one of `MAX_RETRIES` (10) attempts with a growing pause a
 model's raw reply (`describe_reply`); a 429 uses none — every thread of the process waits out one
 shared cooldown that doubles while 429s keep coming (`RATE_LIMIT_*`), so the process backs off as a
 whole; the host dropping is waited out by `wait_for_network`. The cooldown is per process: parallel
-runs share the server's limit; `WORKER_COUNT` is 1 by default, raise it for speed while no 429s
-come. The library's own 429 warnings are silenced, the pause is logged once.
+runs share the server's limit. `WORKER_COUNT` (chat calls) and `EMBEDDING_WORKER_COUNT`
+(embeddings batches, `matching.embed_questions`) are 1 by default; `make models` measures how
+many calls at once each model holds (`list_models.probe`: waves of 1 … `PROBE_MAX_CONCURRENCY`
+simultaneous short requests past the retries, stopping at the first 429 or error). The library's own 429 warnings are silenced, the pause is logged once.
 
 Logging (`kb/utils/logs.py`): every entry point runs inside
 `logs.run(log_dir, command)`. The terminal gets this project's INFO lines (progress of the steps,

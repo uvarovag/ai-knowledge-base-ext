@@ -185,15 +185,18 @@ def require_certificates() -> None:
         )
 
 
-def build_llm(max_tokens: int = config.GIGACHAT_MAX_TOKENS) -> GigaChat:
+def build_llm(
+    max_tokens: int = config.GIGACHAT_MAX_TOKENS, model: str = config.GIGACHAT_MODEL_NAME
+) -> GigaChat:
     """Instantiate the GigaChat client with project defaults.
 
     Merging several entries into one needs a bigger output budget than the
-    default, so the merge steps pass config.MERGE_MAX_TOKENS.
+    default, so the merge steps pass config.MERGE_MAX_TOKENS; make models
+    passes another model to measure it.
     """
-    require_certificate(config.CERT_FILE, config.KEY_FILE, config.GIGACHAT_MODEL_NAME)
+    require_certificate(config.CERT_FILE, config.KEY_FILE, model)
     return GigaChat(
-        model=config.GIGACHAT_MODEL_NAME,
+        model=model,
         base_url=config.GIGACHAT_BASE_URL,
         verify_ssl_certs=config.GIGACHAT_VERIFY_SSL_CERTS,
         cert_file=str(config.CERT_FILE),
@@ -206,15 +209,11 @@ def build_llm(max_tokens: int = config.GIGACHAT_MAX_TOKENS) -> GigaChat:
     )
 
 
-def build_embedder() -> GigaChatEmbeddings:
+def build_embedder(model: str = config.GIGACHAT_EMBEDDINGS_MODEL) -> GigaChatEmbeddings:
     """Instantiate the embeddings client: the same endpoint, its own certificate."""
-    require_certificate(
-        config.EMBEDDINGS_CERT_FILE,
-        config.EMBEDDINGS_KEY_FILE,
-        config.GIGACHAT_EMBEDDINGS_MODEL,
-    )
+    require_certificate(config.EMBEDDINGS_CERT_FILE, config.EMBEDDINGS_KEY_FILE, model)
     return GigaChatEmbeddings(
-        model=config.GIGACHAT_EMBEDDINGS_MODEL,
+        model=model,
         base_url=config.GIGACHAT_BASE_URL,
         verify_ssl_certs=config.GIGACHAT_VERIFY_SSL_CERTS,
         cert_file=str(config.EMBEDDINGS_CERT_FILE),
