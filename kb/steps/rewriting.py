@@ -6,8 +6,9 @@ from typing import Any
 
 import config
 from kb.utils import gigachat, links, prompts
-from kb.utils.entries import Entry
+from kb.utils.entries import entry_schema
 from kb.utils.excel import SourcePair
+from kb.utils.settings import Domain
 
 # ----- Prompt --------------------------------------------------------------
 
@@ -157,27 +158,34 @@ TRANSFORM_USER_PROMPT = """Перепиши эту пару.
 Ответ: {answer}
 """
 
-TRANSFORM_SYSTEM_PROMPT = prompts.render_prompt(
-    TRANSFORM_SYSTEM_PROMPT_TEMPLATE,
-    domain=config.DOMAIN_NAME,
-    categories=prompts.format_categories(),
-    question_words=config.QUESTION_WORDS_TARGET,
-    answer_words=config.ANSWER_WORDS_TARGET,
-    writing_style=prompts.WRITING_STYLE,
-    links_rule=prompts.LINKS_RULE,
-)
+
+def transform_system_prompt(domain: Domain) -> str:
+    return prompts.render_prompt(
+        TRANSFORM_SYSTEM_PROMPT_TEMPLATE,
+        domain=domain.name,
+        categories=prompts.format_categories(domain),
+        question_words=config.QUESTION_WORDS_TARGET,
+        answer_words=config.ANSWER_WORDS_TARGET,
+        writing_style=prompts.WRITING_STYLE,
+        links_rule=prompts.LINKS_RULE,
+    )
+
 
 # ----- Rewriting -----------------------------------------------------------
 
 
-def run_transform(llm: Any, pair: SourcePair) -> dict[str, Any] | None:
+def run_transform(llm: Any, domain: Domain, pair: SourcePair) -> dict[str, Any] | None:
     """Rewrite a pair into a canonical entry; None if the model failed."""
     (question, answer), link_map = links.mask_links([pair.question, pair.answer])
     user_prompt = TRANSFORM_USER_PROMPT.format(question=question, answer=answer)
     label = f"row {pair.row_number} transform"
     return links.ask_with_links(
         lambda hint: gigachat.invoke_structured(
-            llm, TRANSFORM_SYSTEM_PROMPT, user_prompt + hint, schema=Entry, label=label
+            llm,
+            transform_system_prompt(domain),
+            user_prompt + hint,
+            schema=entry_schema(domain),
+            label=label,
         ),
         link_map,
         label,

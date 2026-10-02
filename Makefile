@@ -23,7 +23,7 @@ endef
 # mirror when the store lacks the root as well. Same as [tool.uv] system-certs and
 # allow-insecure-host of a pyproject.toml, which this repo has none.
 
-.PHONY: help setup inspect run dedupe-base repair-base clean dump dump-diff
+.PHONY: help setup inspect models run dedupe-base repair-base clean dump dump-diff
 
 help: ## Show this help menu
 	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) | sed 's/^.*Makefile://' | awk 'BEGIN {FS = ":.*?## "}; {printf "\033[36m%-15s\033[0m %s\n", $$1, $$2}'
@@ -33,20 +33,30 @@ setup: ## Create venv, install uv and requirements.txt
 	@$(SETUP_ENV) && pip install --upgrade pip && pip install uv && uv pip install -r requirements.txt
 	@echo "✅ Venv created, dependencies installed."
 
-inspect: ## Check the input files against config.py and that GigaChat and embeddings answer
-	@$(SETUP_ENV) && python -m kb.tools.inspect_dump
+# Every scenario takes one argument, the TOML config of the run. CONFIG is a
+# variable, not a positional argument: make splits arguments on spaces, and
+# file names have them.
+REQUIRE_CONFIG = @[ -n "$(CONFIG)" ] || { echo "CONFIG is required: make $@ CONFIG=configs/<name>.toml" >&2; exit 1; }
+
+inspect: ## Check the source file of a config and that the models answer. Usage: make inspect CONFIG=...
+	$(REQUIRE_CONFIG)
+	@$(SETUP_ENV) && python -m kb.tools.inspect_dump "$(CONFIG)"
+
+models: ## List the models GigaChat makes available to the certificate
+	@$(SETUP_ENV) && python -m kb.tools.list_models
 
 # caffeinate keeps the Mac awake for hours-long runs: network calls die when it sleeps.
-run: ## Scenario 1: grow the living base from new dumps in config.DUMP_PATHS
-	@$(SETUP_ENV) && caffeinate -is python -m kb.scenarios.tickets_to_base
+run: ## Scenario 1: update the base of a config from its dump. Usage: make run CONFIG=...
+	$(REQUIRE_CONFIG)
+	@$(SETUP_ENV) && caffeinate -is python -m kb.scenarios.tickets_to_base "$(CONFIG)"
 
-dedupe-base: ## Scenario 1 maintenance: deduplicate the living base
-	@$(SETUP_ENV) && caffeinate -is python -m kb.scenarios.dedupe_base
+dedupe-base: ## Scenario 1 maintenance: deduplicate a base. Usage: make dedupe-base CONFIG=...
+	$(REQUIRE_CONFIG)
+	@$(SETUP_ENV) && caffeinate -is python -m kb.scenarios.dedupe_base "$(CONFIG)"
 
-# FILE is a variable, not a positional argument: make splits arguments on spaces, and
-# base file names have them.
-repair-base: ## Scenario 2: repair and deduplicate a base. Usage: make repair-base [FILE="base.xlsx"]
-	@$(SETUP_ENV) && caffeinate -is python -m kb.scenarios.repair_base $(if $(FILE),"$(FILE)",)
+repair-base: ## Scenario 2: repair and deduplicate a base. Usage: make repair-base CONFIG=...
+	$(REQUIRE_CONFIG)
+	@$(SETUP_ENV) && caffeinate -is python -m kb.scenarios.repair_base "$(CONFIG)"
 
 clean: ## Remove the venv and caches (never touches data/)
 	@rm -rf .venv/ .uv-cache/ __pycache__/

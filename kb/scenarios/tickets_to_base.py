@@ -1,38 +1,45 @@
-"""Scenario 1: grow the living knowledge base from dumps of support tickets.
+"""Scenario 1: grow a living knowledge base from a dump of support tickets.
 
-Processes every dump listed in config.DUMP_PATHS that is not in the ledger yet,
-in the order given, then rebuilds the Excel view from the base. Per dump:
+The TOML config names the base and the dump. The base is the one in
+config.BASES_DIR/<name>/ whatever the dump is called, so every new dump
+updates the same base. A dump already in the ledger of the base (matched by
+file content) is skipped. Otherwise:
 
 1. filter and rewrite every ticket into an entry (filtering, rewriting);
 2. collapse duplicates inside the batch (matching, dedup);
 3. merge the batch into the base (merging).
 
-The base is the single source of truth; the workbook is only a view of it.
-An interrupted run resumes from the staging directory of the dump: processed
-rows are skipped and verdicts already received are reused.
+The base JSON is the single source of truth; the Excel file written to the
+output folder of the config is only a view of it. An interrupted run resumes
+from the staging directory of the dump: processed rows are skipped and
+verdicts already received are reused.
 
 Usage:
-    make run
+    make run CONFIG=configs/<base>.toml
 """
 
 from __future__ import annotations
 
+import argparse
 from datetime import datetime
 from pathlib import Path
 from typing import Any
 
 import config
 from kb.steps import dedup, filtering, matching, merging, rewriting
-from kb.utils import batch, entries, excel, logs, storage
+from kb.utils import batch, entries, excel, logs, settings, storage
 from kb.utils.excel import SourcePair
 from kb.utils.logs import logger
+from kb.utils.settings import Domain, TicketsSettings
 
 # ----- One ticket ----------------------------------------------------------
 
 
-def process_ticket(llm: Any, pair: SourcePair, source_file: str) -> batch.Outcome:
+def process_ticket(
+    llm: Any, domain: Domain, pair: SourcePair, source_file: str
+) -> batch.Outcome:
     """Filter one ticket, rewrite it and validate the result."""
-    verdict = filtering.run_filter(llm, pair)
+    verdict = filtering.run_filter(llm, domain, pair)
     if verdict is None:
         return batch.Outcome(reason="filter_failed")
 
@@ -42,7 +49,7 @@ def process_ticket(llm: Any, pair: SourcePair, source_file: str) -> batch.Outcom
     if flag is not None:
         return batch.Outcome(reason=f"filter:{flag}", topic=topic)
 
-    fields = rewriting.run_transform(llm, pair)
+    fields = rewriting.run_transform(llm, domain, pair)
     if fields is None:
         return batch.Outcome(reason="transform_failed", topic=topic)
 
@@ -50,7 +57,7 @@ def process_ticket(llm: Any, pair: SourcePair, source_file: str) -> batch.Outcom
     # written as a digit in the answer that said "равно нулю". A ticket number
     # from the question is removed by the rewriting prompt, not by this check.
     validation_error = entries.validate_entry(
-        fields, pair.question + "\n" + pair.answer
+        fields, pair.question + "\n" + pair.answer, domain
     )
     if validation_error:
         return batch.Outcome(reason=validation_error, topic=topic, model_fields=fields)
@@ -64,18 +71,18 @@ def process_ticket(llm: Any, pair: SourcePair, source_file: str) -> batch.Outcom
     )
 
 
-# ----- One dump ------------------------------------------------------------
+# ----- The dump ------------------------------------------------------------
 
 
-def extract_entries(dump_path: Path, staging_dir: Path) -> list[dict[str, Any]]:
-    """Turn every ticket of a dump with both a question and an answer into an entry."""
+def extract_entries(
+    base: TicketsSettings, staging_dir: Path
+) -> list[dict[str, Any]]:
+    """Turn every ticket of the dump with both a question and an answer into an entry."""
+    dump = base.dump
     pairs = [
         pair
         for pair in excel.read_pairs(
-            dump_path,
-            config.QUESTION_COLUMNS,
-            config.ANSWER_COLUMNS,
-            config.SOURCE_EXTRA_COLUMNS,
+            dump.path, dump.question_columns, dump.answer_columns, dump.extra_columns
         )
         if pair.question and pair.answer
     ]
@@ -83,26 +90,27 @@ def extract_entries(dump_path: Path, staging_dir: Path) -> list[dict[str, Any]]:
 
     extracted, _ = batch.process_rows(
         pairs,
-        lambda llm, pair: process_ticket(llm, pair, dump_path.name),
+        lambda llm, pair: process_ticket(llm, base.domain, pair, dump.path.name),
         staging_dir / "extracted.json",
         staging_dir / "rejected.json",
-        f"Extract {dump_path.name}",
+        f"Extract {dump.path.name}",
     )
     return extracted
 
 
-def process_dump(path: Path, file_hash: str) -> None:
-    """Extract, deduplicate and merge one dump, then record it in the ledger."""
-    staging_dir = storage.staging_dir_for(path)
-    logger.info("=== %s ===", path.name)
+def process_dump(base: TicketsSettings, file_hash: str) -> None:
+    """Extract, deduplicate and merge the dump, then record it in the ledger."""
+    staging_dir = storage.staging_dir_for(base.dump.path, base.staging_dir)
+    logger.info("=== %s -> base %s ===", base.dump.path.name, base.name)
 
-    extracted = extract_entries(path, staging_dir)
+    extracted = extract_entries(base, staging_dir)
 
     cache_path = staging_dir / "verdicts.json"
     if config.FORCE_REPROCESS and cache_path.exists():
         cache_path.unlink()
     logger.info("Deduplicating %d extracted entries", len(extracted))
     deduplicated = dedup.collapse_duplicates(
+        base.domain,
         extracted,
         matching.find_candidate_pairs(extracted),
         dedup.VerdictCache(cache_path, extracted),
@@ -110,70 +118,80 @@ def process_dump(path: Path, file_hash: str) -> None:
     )
     storage.save_json(staging_dir / "deduped.json", deduplicated)
 
-    updated, added = merging.merge_into_base(deduplicated, staging_dir)
-    register_dump(path, file_hash, updated, added)
+    merged, updated, added = merging.merge_into_base(
+        base.domain,
+        base.merge_strategy,
+        storage.load_json(base.base_json),
+        deduplicated,
+        staging_dir,
+    )
+    backup_path = storage.backup_file(base.base_json, base.backup_dir)
+    if backup_path:
+        logger.info("Previous base backed up to %s", backup_path)
+    storage.save_json(base.base_json, merged)
+    register_dump(base, file_hash, updated, added)
 
 
 # ----- Ledger --------------------------------------------------------------
 
 
-def find_pending_dumps() -> list[tuple[Path, str]]:
-    """List dumps that still have to be processed, keeping the configured order."""
-    known_hashes = {
-        record["hash"] for record in storage.load_json(config.PROCESSED_DUMPS_JSON)
-    }
-    pending: list[tuple[Path, str]] = []
-    for path in config.DUMP_PATHS:
-        if not path.exists():
-            raise FileNotFoundError(f"Dump not found: {path}")
-        file_hash = storage.hash_file(path)
-        if config.FORCE_REPROCESS or file_hash not in known_hashes:
-            pending.append((path, file_hash))
-        else:
-            logger.info("Skipping %s, already processed", path.name)
-    return pending
+def is_processed(base: TicketsSettings, file_hash: str) -> bool:
+    """Tell whether this very file has already been merged into the base."""
+    return any(
+        record["hash"] == file_hash
+        for record in storage.load_json(base.processed_dumps_json)
+    )
 
 
-def register_dump(path: Path, file_hash: str, updated: int, added: int) -> None:
-    """Record a processed dump in the ledger, replacing an earlier record of it."""
+def register_dump(
+    base: TicketsSettings, file_hash: str, updated: int, added: int
+) -> None:
+    """Record the processed dump in the ledger, replacing an earlier record of it."""
     ledger = [
         record
-        for record in storage.load_json(config.PROCESSED_DUMPS_JSON)
+        for record in storage.load_json(base.processed_dumps_json)
         if record["hash"] != file_hash
     ]
     ledger.append(
         {
-            "file": path.name,
-            "path": str(path),
+            "file": base.dump.path.name,
+            "path": str(base.dump.path),
             "hash": file_hash,
             "processed_at": datetime.now().isoformat(timespec="seconds"),
             "updated": updated,
             "added": added,
         }
     )
-    storage.save_json(config.PROCESSED_DUMPS_JSON, ledger)
+    storage.save_json(base.processed_dumps_json, ledger)
 
 
 # ----- Entry point ---------------------------------------------------------
 
 
 def main() -> None:
+    parser = argparse.ArgumentParser(description="Grow a base from a dump of tickets.")
+    parser.add_argument("config", type=Path, help="TOML config of the base")
+    base = settings.load(settings.TicketsSettings, parser.parse_args().config)
+
     logs.configure_logging()
-    config.STAGING_DIR.mkdir(parents=True, exist_ok=True)
+    if not base.dump.path.exists():
+        raise FileNotFoundError(f"Dump not found: {base.dump.path}")
 
-    pending = find_pending_dumps()
-    if not pending:
-        logger.info("No new dumps to process")
-    for path, file_hash in pending:
-        process_dump(path, file_hash)
-
-    base = storage.load_json(config.KNOWLEDGE_BASE_JSON)
-    if base:
-        excel.write_knowledge_base(
-            base, config.KNOWLEDGE_BASE_XLSX, config.SOURCE_EXTRA_COLUMNS
+    file_hash = storage.hash_file(base.dump.path)
+    if is_processed(base, file_hash) and not config.FORCE_REPROCESS:
+        logger.info(
+            "%s is already in base %s, nothing to process",
+            base.dump.path.name,
+            base.name,
         )
     else:
-        logger.warning("Knowledge base is empty, nothing to export")
+        process_dump(base, file_hash)
+
+    entries_of_base = storage.load_json(base.base_json)
+    if entries_of_base:
+        excel.write_knowledge_base(entries_of_base, base.output_file())
+    else:
+        logger.warning("Knowledge base %s is empty, nothing to export", base.name)
 
 
 if __name__ == "__main__":

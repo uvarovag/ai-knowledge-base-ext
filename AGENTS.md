@@ -16,22 +16,52 @@ Guidance for AI coding agents (Claude Code, GigaCode, any other) working in this
 Builds and maintains a support knowledge base with GigaChat. Python 3.13, `langchain-gigachat`,
 pandas/openpyxl for Excel. Two scenarios, each one make target:
 
-1. **Tickets to base** (`make run`) — grows the living base `data/knowledge_base.json` (source
-   of truth, `.xlsx` view) from Excel dumps of support tickets.
+1. **Tickets to base** (`make run`) — grows a living base from an Excel dump of support
+   tickets.
 2. **Repair a base** (`make repair-base`) — turns a poor base (an Excel sheet of questions and
-   answers) into a good one in `data/repaired/<input stem>/`, plus a sheet of the rows left out
-   and why. The input file is a command-line argument, so two files can run in two terminals.
+   answers) into a good one, plus a sheet of the rows left out and why.
+
+## Configuration
+
+Two levels, never mixed:
+
+- **`config.py`** — technical settings shared by every run: GigaChat, retries, workers,
+  thresholds, word limits, Excel styling, and the technical storage (`DATA_DIR`,
+  `BASES_DIR`, `REPAIRS_DIR`, `EMBEDDINGS_CACHE`, `ERROR_LOG`).
+- **A TOML config per run** (`configs/`), the only command-line argument of every script
+  (`make <target> CONFIG=...`). It holds only what that script needs, and its files are Excel
+  only — people hand in and get back `.xlsx`, JSON is technical state. Read by
+  `kb/utils/settings.py` into pydantic models with `extra="forbid"` (a typo is an error):
+  - every config: `name` (the base; a directory name and the start of the output file
+    names), `output_dir`, `[domain]` with `name` (substituted into every prompt) and
+    `[domain.categories]` (key stored in the entry → description shown to the model);
+  - `TicketsSettings` (`make run`): `merge_strategy` and `[dump]` — one dump: `path`,
+    `question_columns`, `answer_columns`, `extra_columns`;
+  - `DedupeSettings` (`make dedupe-base`): nothing more;
+  - `RepairSettings` (`make repair-base`): `[input]` — the base to repair, same keys as
+    `[dump]`.
+
+An output file is `<output_dir>/<name>_<YYYY-MM-DD>.xlsx` (a repair adds
+`<name>_<date>_rejected.xlsx`), so every run leaves its own dated version. The base is
+identified by `name` only: any dump in `[dump].path` updates the base of that name. Steps get
+the `settings.Domain` passed explicitly; prompts and the category enum of the schemas are
+built from it per call.
+
+Configs in the repository: `configs/supplier-portal-sap.toml` (`make run`) and
+`configs/supplier-portal-sap-dedupe.toml` (`make dedupe-base`) for the base «Портал
+поставщика SAP».
 
 ## Commands
 
 ```bash
 make setup          # venv + uv + requirements.txt (PYTHON and SBEROSC_TOKEN from .env, see .env.example)
 source activate.sh  # activate the venv with the same environment as the Makefile
-make inspect        # check the input files' columns against config.py and that GigaChat and embeddings answer
-make run            # scenario 1 under caffeinate (network calls die when the Mac sleeps)
-make dedupe-base    # scenario 1 maintenance: deduplicate the living base against itself
-make repair-base FILE="base.xlsx"  # scenario 2; without FILE reads config.REPAIR_INPUT_PATH
-make help           # every target
+make inspect CONFIG=...      # check the source file of a run or repair config and that GigaChat and embeddings answer
+make models                  # list the models GigaChat makes available to the certificate
+make run CONFIG=...          # scenario 1 under caffeinate (network calls die when the Mac sleeps)
+make dedupe-base CONFIG=...  # scenario 1 maintenance: deduplicate a base against itself
+make repair-base CONFIG=...  # scenario 2
+make help                    # every target
 ```
 
 Every command is a module run with `python -m` from the repository root (see the Makefile).
@@ -69,7 +99,7 @@ words: `HtmlParser`, `parse_html`, never `HTMLParser`. Settings in `config.py` a
 **English**: logs, exception messages, comments and `TODO`s, docstrings, identifiers.
 
 **Russian** (the model and the reviewers read it — don't "fix" it): every prompt and every text
-the model reads (`CATEGORIES` descriptions, `DOMAIN_NAME`, docstrings and field descriptions of
+the model reads (category descriptions and the domain name of the TOML configs, docstrings and field descriptions of
 the structured output schemas), and `README.md`, which is for people. Every prompt opens with the
 model's role («Ты — сортировщик …», «Ты — редактор …») and carries few-shot examples, taken from
 real tickets where possible. Every prompt that writes a question or an answer of the base includes
@@ -101,9 +131,11 @@ column 79, no `=`, no boxes:
 
 ## Layout
 
-`config.py` (repository root) is the single settings module. Everything else lives in `kb/`:
+`config.py` (repository root) holds the technical settings, `configs/` the TOML configs of
+the runs. Everything else lives in `kb/`:
 
-- **`kb/utils/`** — infrastructure with no knowledge base logic: `logs` (logger, `ProgressBar`,
+- **`kb/utils/`** — infrastructure with no knowledge base logic: `settings` (TOML configs),
+  `logs` (logger, `ProgressBar`,
   `configure_logging`), `storage` (atomic JSON, backups, content hashes, `staging_dir_for`),
   `gigachat` (clients, `invoke_structured`, embeddings, network wait), `prompts`
   (`render_prompt`, the shared `WRITING_STYLE` and `LINKS_RULE` blocks), `links` (link
@@ -114,18 +146,19 @@ column 79, no `=`, no boxes:
 - **`kb/steps/`** — one transformation each, on lists of entries, with its prompt and schema:
   `filtering`, `rewriting`, `repairing`, `matching`, `dedup`, `merging`.
 - **`kb/scenarios/`** — entry points that compose the steps: `tickets_to_base`, `dedupe_base`,
-  `repair_base`. **`kb/tools/`** — `inspect_dump`.
+  `repair_base`. **`kb/tools/`** — `inspect_dump`, `list_models`.
 
 ## Scenario 1: tickets to base (`kb/scenarios/tickets_to_base.py`)
 
-For every dump listed in `config.DUMP_PATHS` (processed in the given order, oldest to freshest —
-later dumps update matching entries from earlier ones) that isn't already in
-`data/processed_dumps.json` (matched by file SHA-256), then rebuilds the Excel view once:
+Merges the dump of `[dump].path` into the base `name` (`data/bases/<name>/knowledge_base.json`),
+unless it is already in that base's `processed_dumps.json` (matched by file SHA-256), then
+writes the Excel view. Dumps are fed one run at a time, oldest to freshest — a later dump
+updates matching entries from earlier ones:
 
 1. **Filter and rewrite** (`filtering`, `rewriting`, run through `batch.process_rows`) — two LLM
    calls per ticket: a _filter_ (does the pair generalize beyond one ticket — reusable question,
    instructional not one-off, complete) and a _transform_ (rewrite into canonical form with a
-   category from `config.CATEGORIES`; names become roles, a vague question is rebuilt from the
+   category from `[domain.categories]`; names become roles, a vague question is rebuilt from the
    answer). A pair failing the filter is written to `rejected.json` with a reason instead of being
    dropped silently.
 2. **Deduplicate the batch** (`matching`, `dedup`) — `matching` finds _candidate_ pairs cheaply
@@ -139,7 +172,8 @@ later dumps update matching entries from earlier ones) that isn't already in
    similarity is **not transitive**. A group is merged in two steps (`dedup.merge_group`): `same`
    answers collapse into one full answer first, then the different causes become one list.
 3. **Merge into the base** (`merging.merge_into_base`) — one-to-one matching by the same three
-   signals. On a matched entry with differing answers `config.MERGE_STRATEGY` decides:
+   signals. `merging` works on lists; the scenario loads, backs up and saves the base. On a matched
+   entry with differing answers `merge_strategy` of the config decides:
    `"accumulate"` appends the new cause, `"replace"` lets the fresh answer win. Answers that say
    the same thing, or contradict each other, are always replaced by the fresh one.
 
@@ -147,12 +181,12 @@ later dumps update matching entries from earlier ones) that isn't already in
 against each other, which scenario 1 never does (and one-to-one matching leaves a second duplicate
 untouched). Candidates come from question embeddings plus question trigrams, categories ignored;
 without embeddings the trigram threshold drops to `TRIGRAM_ONLY_CANDIDATE_THRESHOLD`. The rest is
-`dedup.collapse_duplicates`. Its verdict cache lives in `data/staging/base_dedupe/`.
+`dedup.collapse_duplicates`. Its verdict cache lives in `data/bases/<name>/staging/base_dedupe/`.
 
 ## Scenario 2: repair a base (`kb/scenarios/repair_base.py`)
 
-Reads `config.REPAIR_INPUT_PATH` by `REPAIR_QUESTION_COLUMNS` / `REPAIR_ANSWER_COLUMNS` (the
-defaults read a `knowledge_base.xlsx` this project wrote). There is **no** "belongs in a base" or
+Reads `[input]` of the repair config (columns «Вопрос» / «Ответ» read an Excel this project
+wrote). There is **no** "belongs in a base" or
 "one-off answer" check — somebody already put the entry there. Per row, `repairing` makes one LLM
 call that repairs rather than rejects: the answer holds the knowledge, so a vague question, a bare
 request or a question the answer does not quite answer is rewritten to fit the answer, a partial
@@ -163,23 +197,21 @@ explains nothing) is left out, with the model's reason. Long regulatory answers 
 ceiling (`REPAIR_MAX_ANSWER_WORDS`) and output budget (`REPAIR_MAX_TOKENS`). A row without an
 answer is left out without a call. Then
 `dedup.collapse_duplicates` over the whole result, candidates as in scenario 1. Outputs go to
-`REPAIRED_BASE_DIR/<input stem>/`: `knowledge_base.json` / `.xlsx` and `rejected.xlsx` (source row,
-reason, question, answer, and the model's question and answer when the code validation rejected
-them — `batch.Outcome.model_fields`, in both scenarios' `rejected.json` too). The living base of
-scenario 1 is never touched.
+`output_dir`: `<name>_<date>.xlsx` and `<name>_<date>_rejected.xlsx` (source row, reason,
+question, answer, and the model's question and answer when the code validation rejected them —
+`batch.Outcome.model_fields`, in both scenarios' `rejected.json` too). Staging lives in
+`data/repairs/<name>/`, apart from the living bases, which are never touched.
 
-Runs on different input files may go in parallel: staging and outputs are per input, and the files
+Runs with different configs may go in parallel: staging is per base name, and the files
 several runs share are written through a per-process temporary file (`storage.save_json`,
 `matching.save_embedding_cache`; two runs adding embeddings at once may drop each other's new
-vectors, which only costs re-embedding) or appended (`errors.log`). Two runs on the same file are
-not supported.
+vectors, which only costs re-embedding) or appended (`errors.log`). Two runs on the same base are not supported.
 
 ### Guardrails on LLM output
 
 Every model reply comes through structured output (`gigachat.invoke_structured`: function calling
-against a Pydantic schema; the schema lives next to its prompt, `Entry` in `kb/utils/entries.py`).
-Every generated entry is validated in code, not trusted (`entries.validate_entry`): category must be
-one of `config.CATEGORIES`, question/answer must respect word-count limits, and — the main check —
+against a Pydantic schema; the schema lives next to its prompt, `entries.entry_schema(domain)` for an entry).
+Every generated entry is validated in code, not trusted (`entries.validate_entry`): category must be one of `[domain.categories]`, question/answer must respect word-count limits, and — the main check —
 every link in the rewritten answer must be verbatim in the source (`entries.find_invented_links`: a
 "fixed" encoded link or one copied from a prompt example leads nowhere), and every number must
 appear in the source question or answer (`entries.find_invented_numbers`; links and list markers are
@@ -193,23 +225,22 @@ detailed entry with the provenance of all of them.
 
 ### Resumability
 
-Per-source state lives in `data/staging/<prefix><stem>-<hash-prefix>/` (`storage.staging_dir_for`,
-keyed by content hash so a corrected file doesn't collide with the original; scenario 2 uses the
-`repair-` prefix): `batch.process_rows` skips rows already in the accepted or rejected file (rows
+Per-source state lives in `<base work dir>/staging/<stem>-<hash-prefix>/`
+(`storage.staging_dir_for`, keyed by content hash so a corrected file doesn't collide with the
+original): `batch.process_rows` skips rows already in the accepted or rejected file (rows
 that _failed_ rather than got rejected are retried — a failure is not a verdict); `dedup` reuses
 verdicts from `verdicts.json` and `merging` from `match_verdicts.json` (`dedup.VerdictCache`, keyed
 by the content hashes of the two entries, never by their positions). Question embeddings are cached
-once for every step in `data/staging/embeddings.npz`, keyed by question text. The base is copied to
-`data/backups/` before every write; writes are atomic (temp file + `os.replace`,
+once for every step and every base in `data/embeddings.npz`, keyed by question text. The base
+is copied to `data/bases/<name>/backups/` before every write; writes are atomic (temp file + `os.replace`,
 `storage.save_json`).
 
 ### Domain configuration
 
-Retargeting at another support domain means editing `config.py`, not the code: `DUMP_PATHS`,
-`DOMAIN_NAME` (substituted into every prompt), `CATEGORIES` (key → description shown to the model),
-`QUESTION_COLUMNS` / `ANSWER_COLUMNS` (joined with `COLUMN_SEPARATOR`), `SOURCE_EXTRA_COLUMNS`
-(copied per entry; a missing column is a warning — check with `make inspect`), and the `REPAIR_*`
-settings of scenario 2. Deduplication thresholds: question ones (`CANDIDATE_THRESHOLD`,
+Retargeting at another support domain means a new TOML config, not code: `[domain]` and the
+columns of the source (question and answer columns joined with `config.COLUMN_SEPARATOR`;
+`extra_columns` copied per entry, a missing one is a warning — check with `make inspect`).
+Deduplication thresholds, in `config.py`: question ones (`CANDIDATE_THRESHOLD`,
 `MATCH_THRESHOLD`) are deliberately low — a false candidate costs one LLM call, a missed one leaves
 a permanent duplicate; the `ANSWER_*` ones are deliberately high — shared boilerplate must not merge
 unrelated problems; `*_CROSS_CATEGORY_THRESHOLD` gates comparisons across model-assigned
@@ -233,9 +264,11 @@ the content keys of every cache.
 
 ## Data layout (git-ignored)
 
-`data/`: `knowledge_base.json` / `.xlsx` (the live base and its view), `processed_dumps.json`
-(ledger of processed dump hashes), `repaired/` (scenario 2 output), `errors.log` (warnings and
-errors of every run), `staging/` (resumable intermediate state; `staging/<source>/rejected.json`
-holds the left-out rows with reasons), `backups/` (pre-write snapshots of the base). The input files
-contain real tickets: never commit them or anything under `data/`. GigaChat mTLS certificates live
+`data/` (`config.DATA_DIR`, technical state only): `bases/<name>/` — `knowledge_base.json` (the
+source of truth of a base), `processed_dumps.json` (ledger of processed dump hashes), `staging/`
+(resumable intermediate state; `staging/<source>/rejected.json` holds the left-out rows with
+reasons), `backups/` (pre-write snapshots of the base); `repairs/<name>/staging/` (scenario 2);
+`embeddings.npz`; `errors.log` (warnings and errors of every run). `output/` — the Excel files
+of the committed configs. The input files contain real tickets: never commit them or anything
+under `data/` or `output/`. GigaChat mTLS certificates live
 in `.gigachat/` (`client-cert.pem`, `client-cert.key`).

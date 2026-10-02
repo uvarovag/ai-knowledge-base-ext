@@ -9,19 +9,26 @@ from pydantic import BaseModel, Field
 
 import config
 from kb.utils import links, storage
+from kb.utils.settings import Domain
 
 # Schemas the model fills through function calling: their docstrings and field
-# descriptions are sent to the model, so they are written in Russian.
+# descriptions are sent to the model, so they are written in Russian. The
+# categories come from the TOML config, so a schema is built per domain.
 
 
-class Entry(BaseModel):
-    """Запись базы знаний: категория, вопрос пользователя и ответ на него."""
+def entry_schema(domain: Domain) -> type[BaseModel]:
+    """Return the schema of an entry whose category is one of the domain's."""
 
-    category: Literal[tuple(config.CATEGORIES)] = Field(
-        description="Категория — ровно одно значение из списка"
-    )
-    question: str = Field(description="Вопрос от лица пользователя")
-    answer: str = Field(description="Ответ")
+    class Entry(BaseModel):
+        """Запись базы знаний: категория, вопрос пользователя и ответ на него."""
+
+        category: Literal[tuple(domain.categories)] = Field(
+            description="Категория — ровно одно значение из списка"
+        )
+        question: str = Field(description="Вопрос от лица пользователя")
+        answer: str = Field(description="Ответ")
+
+    return Entry
 
 
 # ----- Validation ----------------------------------------------------------
@@ -106,6 +113,7 @@ def is_expanded_year(number: str, source_numbers: set[str]) -> bool:
 def validate_entry(
     entry: dict[str, Any],
     source_text: str,
+    domain: Domain,
     max_answer_words: int | None = None,
 ) -> str | None:
     """Check a generated entry against the source text.
@@ -120,7 +128,7 @@ def validate_entry(
     )
 
     category = entry.get("category")
-    if category not in config.CATEGORIES:
+    if category not in domain.categories:
         return f"unknown_category:{category}"
 
     question = entry.get("question")

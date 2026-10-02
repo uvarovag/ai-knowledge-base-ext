@@ -1,0 +1,49 @@
+# make run CONFIG=configs/supplier-portal-sap.toml — update the base from a
+# dump of tickets.
+
+# The base to update. Its technical state lives in data/bases/<name>/, so any
+# dump given below updates this same base. Also the start of the output file
+# name: <name>_<date>.xlsx.
+name = "Портал поставщика SAP"
+
+# Folder the Excel view of the base is written to.
+output_dir = "output"
+
+# A fresh entry answers a question already in the base with a DIFFERENT cause:
+#   "accumulate" — keep both causes as a numbered list of possible causes;
+#   "replace"    — the fresh answer wins, the old one is dropped.
+# Answers that say the same thing or contradict each other are always replaced.
+merge_strategy = "accumulate"
+
+# The dump of tickets. A dump already merged into the base (same content) is
+# skipped. Check the column names with make inspect.
+[dump]
+path = "~/Desktop/Обращения ПП.xlsx"
+# Joined into the question and the answer of one pair.
+question_columns = ["Описания обращения"]
+answer_columns = ["Решение"]
+# Copied verbatim into every entry, for traceability. A column missing from
+# the dump is skipped with a warning.
+extra_columns = [
+    "Обозначение ВидДокум",
+    "Направление закупки",
+    "Направление",
+    "Категория",
+    "Тема",
+]
+
+# What the model is told about the domain.
+[domain]
+# Substituted into every prompt: «служба поддержки <name>».
+name = "портала поставщика SAP"
+
+# Categories offered to the model: the key is stored in the entry, the value is
+# shown to the model as its description.
+[domain.categories]
+how_to = "как выполнить действие: где найти, как создать, изменить, настроить"
+troubleshooting = "ошибки и сбои: что-то не работает, не открывается, не сохраняется"
+access = "доступы, роли, права, регистрация, вход, пароли"
+documents = "документы и файлы: загрузка, формирование, подписание, форматы"
+data = "данные и отчёты: выгрузки, поиск, проверка значений"
+policy = "правила, регламенты, сроки, зоны ответственности"
+other = "не подходит ни одна категория выше"

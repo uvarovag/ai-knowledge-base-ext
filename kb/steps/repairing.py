@@ -17,6 +17,7 @@ from pydantic import BaseModel, Field, model_validator
 import config
 from kb.utils import gigachat, links, prompts
 from kb.utils.excel import SourcePair
+from kb.utils.settings import Domain
 
 # ----- Prompt --------------------------------------------------------------
 
@@ -172,53 +173,60 @@ REPAIR_USER_PROMPT = """Почини эту запись.
 Ответ: {answer}
 """
 
-REPAIR_SYSTEM_PROMPT = prompts.render_prompt(
-    REPAIR_SYSTEM_PROMPT_TEMPLATE,
-    domain=config.DOMAIN_NAME,
-    categories=prompts.format_categories(),
-    question_words=config.QUESTION_WORDS_TARGET,
-    answer_words=config.ANSWER_WORDS_TARGET,
-    max_answer_words=config.REPAIR_MAX_ANSWER_WORDS,
-    writing_style=prompts.WRITING_STYLE,
-    links_rule=prompts.LINKS_RULE,
-)
+
+def repair_system_prompt(domain: Domain) -> str:
+    return prompts.render_prompt(
+        REPAIR_SYSTEM_PROMPT_TEMPLATE,
+        domain=domain.name,
+        categories=prompts.format_categories(domain),
+        question_words=config.QUESTION_WORDS_TARGET,
+        answer_words=config.ANSWER_WORDS_TARGET,
+        max_answer_words=config.REPAIR_MAX_ANSWER_WORDS,
+        writing_style=prompts.WRITING_STYLE,
+        links_rule=prompts.LINKS_RULE,
+    )
 
 
-class RepairedEntry(BaseModel):
-    """Запись базы знаний после починки и решение, полная ли она."""
+def repaired_entry_schema(domain: Domain) -> type[BaseModel]:
+    """Return the schema of a repaired entry whose category is one of the domain's."""
 
-    # Field order is the order the model writes the arguments in: the text
-    # first, the verdict on it last, so the decision judges a finished repair.
-    category: Literal[tuple(config.CATEGORIES)] = Field(
-        description="Категория — ровно одно значение из списка"
-    )
-    question: str = Field(
-        description="Исправленный вопрос; пусто, если complete = false"
-    )
-    answer: str = Field(
-        description="Исправленный ответ; пусто, если complete = false"
-    )
-    reason: str = Field(description="Причина решения, до 10 слов")
-    complete: bool = Field(
-        description=(
-            "false только если в ответе нет сути: пустой, реплика из переписки "
-            "или ничего не объясняет"
+    class RepairedEntry(BaseModel):
+        """Запись базы знаний после починки и решение, полная ли она."""
+
+        # Field order is the order the model writes the arguments in: the text
+        # first, the verdict on it last, so the decision judges a finished repair.
+        category: Literal[tuple(domain.categories)] = Field(
+            description="Категория — ровно одно значение из списка"
         )
-    )
+        question: str = Field(
+            description="Исправленный вопрос; пусто, если complete = false"
+        )
+        answer: str = Field(
+            description="Исправленный ответ; пусто, если complete = false"
+        )
+        reason: str = Field(description="Причина решения, до 10 слов")
+        complete: bool = Field(
+            description=(
+                "false только если в ответе нет сути: пустой, реплика из переписки "
+                "или ничего не объясняет"
+            )
+        )
 
-    @model_validator(mode="after")
-    def check_filled(self) -> RepairedEntry:
-        # A complete entry with an empty side is a contradictory reply; failing
-        # validation sends it back to the model instead of losing the row.
-        if self.complete and not (self.question.strip() and self.answer.strip()):
-            raise ValueError("complete entry has an empty question or answer")
-        return self
+        @model_validator(mode="after")
+        def check_filled(self) -> RepairedEntry:
+            # A complete entry with an empty side is a contradictory reply; failing
+            # validation sends it back to the model instead of losing the row.
+            if self.complete and not (self.question.strip() and self.answer.strip()):
+                raise ValueError("complete entry has an empty question or answer")
+            return self
+
+    return RepairedEntry
 
 
 # ----- Repairing -----------------------------------------------------------
 
 
-def run_repair(llm: Any, pair: SourcePair) -> dict[str, Any] | None:
+def run_repair(llm: Any, domain: Domain, pair: SourcePair) -> dict[str, Any] | None:
     """Repair one entry; None if the model failed."""
     (question, answer), link_map = links.mask_links([pair.question, pair.answer])
     user_prompt = REPAIR_USER_PROMPT.format(question=question, answer=answer)
@@ -226,9 +234,9 @@ def run_repair(llm: Any, pair: SourcePair) -> dict[str, Any] | None:
     return links.ask_with_links(
         lambda hint: gigachat.invoke_structured(
             llm,
-            REPAIR_SYSTEM_PROMPT,
+            repair_system_prompt(domain),
             user_prompt + hint,
-            schema=RepairedEntry,
+            schema=repaired_entry_schema(domain),
             label=label,
         ),
         link_map,

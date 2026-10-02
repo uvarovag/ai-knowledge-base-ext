@@ -10,9 +10,6 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
-import config
-
-
 def load_json(path: Path) -> list[dict[str, Any]]:
     """Read a list of records from a UTF-8 JSON file. Missing file means empty list."""
     if not path.exists():
@@ -38,13 +35,13 @@ def save_json(path: Path, payload: list[dict[str, Any]]) -> None:
     os.replace(temporary_path, path)
 
 
-def backup_file(path: Path) -> Path | None:
+def backup_file(path: Path, backup_dir: Path) -> Path | None:
     """Copy a file into the backup directory with a timestamp in its name."""
     if not path.exists():
         return None
-    config.BACKUP_DIR.mkdir(parents=True, exist_ok=True)
+    backup_dir.mkdir(parents=True, exist_ok=True)
     stamp = datetime.now().strftime("%Y%m%d-%H%M%S-%f")
-    destination = config.BACKUP_DIR / f"{path.stem}-{stamp}{path.suffix}"
+    destination = backup_dir / f"{path.stem}-{stamp}{path.suffix}"
     shutil.copy2(path, destination)
     return destination
 
@@ -76,14 +73,13 @@ def hash_entry(entry: dict[str, Any]) -> str:
     return hash_text(entry["question"] + "\n" + entry["answer"])
 
 
-def staging_dir_for(source_path: Path, prefix: str = "") -> Path:
+def staging_dir_for(source_path: Path, staging_root: Path) -> Path:
     """Return the staging directory of a source file, creating it if needed.
 
     The hash is part of the name so that two files with the same name, or a
-    corrected re-upload of one, do not share intermediate files. The prefix
-    keeps scenarios apart when both are run on the same file.
+    corrected re-upload of one, do not share intermediate files.
     """
-    name = f"{prefix}{source_path.stem}-{hash_file(source_path)[:8]}"
-    directory = config.STAGING_DIR / name
+    name = f"{source_path.stem}-{hash_file(source_path)[:8]}"
+    directory = staging_root / name
     directory.mkdir(parents=True, exist_ok=True)
     return directory

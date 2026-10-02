@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-import config
+from kb.utils.settings import Domain
 
 
 # Style rules for every prompt that writes a question or an answer of the
@@ -45,13 +45,13 @@ def render_prompt(template: str, **values: str | int) -> str:
     return rendered
 
 
-def format_categories() -> str:
-    """Render the configured categories as a bullet list for a prompt."""
+def format_categories(domain: Domain) -> str:
+    """Render the categories of a domain as a bullet list for a prompt."""
     return "\n".join(
-        f"- {name} — {description}" for name, description in config.CATEGORIES.items()
+        f"- {name} — {description}" for name, description in domain.categories.items()
     )
 
 
-def format_category_names() -> str:
-    """Render the configured category keys as a comma separated list."""
-    return ", ".join(config.CATEGORIES)
+def format_category_names(domain: Domain) -> str:
+    """Render the category keys of a domain as a comma separated list."""
+    return ", ".join(domain.categories)

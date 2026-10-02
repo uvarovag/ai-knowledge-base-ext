@@ -41,8 +41,9 @@ from pydantic import BaseModel, Field
 
 import config
 from kb.utils import gigachat, links, logs, prompts, storage
-from kb.utils.entries import Entry, merge_sources, merged_entry, validate_entry
+from kb.utils.entries import entry_schema, merge_sources, merged_entry, validate_entry
 from kb.utils.logs import logger
+from kb.utils.settings import Domain
 
 RELATION_SAME = "same"
 RELATION_ALTERNATIVES = "alternatives"
@@ -300,29 +301,25 @@ MERGE_USER_PROMPT = """Объедини эти записи в одну:
 {entries}
 """
 
-DUPLICATE_SYSTEM_PROMPT = prompts.render_prompt(
-    DUPLICATE_SYSTEM_PROMPT_TEMPLATE, domain=config.DOMAIN_NAME
-)
 
-MERGE_SYSTEM_PROMPT = prompts.render_prompt(
-    MERGE_SYSTEM_PROMPT_TEMPLATE,
-    domain=config.DOMAIN_NAME,
-    category_names=prompts.format_category_names(),
-    question_words=config.QUESTION_WORDS_TARGET,
-    answer_words=config.ANSWER_WORDS_TARGET,
-    writing_style=prompts.WRITING_STYLE,
-    links_rule=prompts.LINKS_RULE,
-)
+def duplicate_system_prompt(domain: Domain) -> str:
+    return prompts.render_prompt(DUPLICATE_SYSTEM_PROMPT_TEMPLATE, domain=domain.name)
 
-MERGE_VARIANTS_SYSTEM_PROMPT = prompts.render_prompt(
-    MERGE_VARIANTS_SYSTEM_PROMPT_TEMPLATE,
-    domain=config.DOMAIN_NAME,
-    category_names=prompts.format_category_names(),
-    question_words=config.QUESTION_WORDS_TARGET,
-    answer_words=config.VARIANTS_ANSWER_WORDS_TARGET,
-    writing_style=prompts.WRITING_STYLE,
-    links_rule=prompts.LINKS_RULE,
-)
+
+def merge_system_prompt(domain: Domain, as_variants: bool) -> str:
+    """The prompt of a plain merge, or with as_variants of a list of causes."""
+    return prompts.render_prompt(
+        MERGE_VARIANTS_SYSTEM_PROMPT_TEMPLATE if as_variants else MERGE_SYSTEM_PROMPT_TEMPLATE,
+        domain=domain.name,
+        category_names=prompts.format_category_names(domain),
+        question_words=config.QUESTION_WORDS_TARGET,
+        answer_words=(
+            config.VARIANTS_ANSWER_WORDS_TARGET if as_variants else config.ANSWER_WORDS_TARGET
+        ),
+        writing_style=prompts.WRITING_STYLE,
+        links_rule=prompts.LINKS_RULE,
+    )
+
 
 # ----- Verdict cache -------------------------------------------------------
 
@@ -392,13 +389,13 @@ class VerdictCache:
 
 
 def check_pair(
-    llm: Any, entries: list[dict[str, Any]], pair: tuple[int, int]
+    llm: Any, domain: Domain, entries: list[dict[str, Any]], pair: tuple[int, int]
 ) -> tuple[tuple[int, int], dict[str, Any] | None]:
     """Ask the model whether the two entries answer the same question."""
     first, second = pair
     verdict = gigachat.invoke_structured(
         llm,
-        DUPLICATE_SYSTEM_PROMPT,
+        duplicate_system_prompt(domain),
         DUPLICATE_USER_PROMPT.format(
             first_question=entries[first]["question"],
             first_answer=entries[first]["answer"],
@@ -413,6 +410,7 @@ def check_pair(
 
 def judge_pairs(
     llm: Any,
+    domain: Domain,
     entries: list[dict[str, Any]],
     pairs: list[tuple[int, int]],
     cache: VerdictCache,
@@ -464,7 +462,9 @@ def judge_pairs(
     # Only the workers run in parallel; every result is folded in here, on the
     # main thread, so the cache needs no lock.
     with ThreadPoolExecutor(max_workers=config.WORKER_COUNT) as executor:
-        futures = [executor.submit(check_pair, llm, entries, pair) for pair in pending]
+        futures = [
+            executor.submit(check_pair, llm, domain, entries, pair) for pair in pending
+        ]
         for future in as_completed(futures):
             pair, verdict = future.result()
             if verdict is None:
@@ -599,7 +599,10 @@ def format_entries(group_entries: list[dict[str, Any]]) -> str:
 
 
 def validate_merged(
-    merged: dict[str, Any], group_entries: list[dict[str, Any]], as_variants: bool
+    merged: dict[str, Any],
+    group_entries: list[dict[str, Any]],
+    as_variants: bool,
+    domain: Domain,
 ) -> str | None:
     """Check a merged entry. Returns a rejection reason, or None if valid."""
     source_text = " ".join(entry["answer"] for entry in group_entries)
@@ -613,7 +616,7 @@ def validate_merged(
     else:
         answer_limit = config.MAX_ANSWER_WORDS
 
-    rejection_reason = validate_entry(merged, source_text, answer_limit)
+    rejection_reason = validate_entry(merged, source_text, domain, answer_limit)
     if rejection_reason is not None:
         return rejection_reason
 
@@ -631,7 +634,11 @@ def validate_merged(
 
 
 def merge_entries(
-    llm: Any, group_entries: list[dict[str, Any]], as_variants: bool, label: str
+    llm: Any,
+    domain: Domain,
+    group_entries: list[dict[str, Any]],
+    as_variants: bool,
+    label: str,
 ) -> dict[str, Any] | None:
     """Rewrite several entries into one. Returns None if the result is unusable.
 
@@ -645,11 +652,15 @@ def merge_entries(
         {"question": question, "answer": answer}
         for question, answer in zip(masked[::2], masked[1::2])
     ]
-    system_prompt = MERGE_VARIANTS_SYSTEM_PROMPT if as_variants else MERGE_SYSTEM_PROMPT
+    system_prompt = merge_system_prompt(domain, as_variants)
     user_prompt = MERGE_USER_PROMPT.format(entries=format_entries(masked_entries))
     merged = links.ask_with_links(
         lambda hint: gigachat.invoke_structured(
-            llm, system_prompt, user_prompt + hint, schema=Entry, label=label
+            llm,
+            system_prompt,
+            user_prompt + hint,
+            schema=entry_schema(domain),
+            label=label,
         ),
         link_map,
         label,
@@ -658,7 +669,7 @@ def merge_entries(
         logger.warning("%s: merge failed", label)
         return None
 
-    rejection_reason = validate_merged(merged, group_entries, as_variants)
+    rejection_reason = validate_merged(merged, group_entries, as_variants, domain)
     if rejection_reason is not None:
         logger.warning("%s: merge rejected (%s)", label, rejection_reason)
         return None
@@ -700,7 +711,7 @@ def split_same_clusters(
 
 
 def merge_same(
-    llm: Any, cluster_entries: list[dict[str, Any]], label: str
+    llm: Any, domain: Domain, cluster_entries: list[dict[str, Any]], label: str
 ) -> dict[str, Any]:
     """Collapse entries that say the same thing into one full entry.
 
@@ -709,7 +720,7 @@ def merge_same(
     """
     if len(cluster_entries) == 1:
         return cluster_entries[0]
-    merged = merge_entries(llm, cluster_entries, as_variants=False, label=label)
+    merged = merge_entries(llm, domain, cluster_entries, as_variants=False, label=label)
     if merged is None:
         logger.warning("%s: keeping the most detailed entry instead", label)
         return max(cluster_entries, key=lambda entry: len(entry["answer"]))
@@ -718,6 +729,7 @@ def merge_same(
 
 def merge_group(
     llm: Any,
+    domain: Domain,
     entries: list[dict[str, Any]],
     group: Group,
     relations: dict[tuple[int, int], str],
@@ -738,7 +750,9 @@ def merge_group(
     for position, cluster in enumerate(clusters, start=1):
         cluster_entries = [entries[index] for index in cluster]
         cluster_label = label if len(clusters) == 1 else f"{label} cause {position}"
-        collapsed.append((merge_same(llm, cluster_entries, cluster_label), cluster_entries))
+        collapsed.append(
+            (merge_same(llm, domain, cluster_entries, cluster_label), cluster_entries)
+        )
 
     if len(collapsed) == 1:
         merged, cluster_entries = collapsed[0]
@@ -756,6 +770,7 @@ def merge_group(
 
     variants = merge_entries(
         llm,
+        domain,
         [merged for merged, _ in collapsed],
         as_variants=True,
         label=f"{label} variants",
@@ -775,6 +790,7 @@ def merge_group(
 
 
 def collapse_duplicates(
+    domain: Domain,
     entries: list[dict[str, Any]],
     candidates: list[tuple[int, int]],
     cache: VerdictCache,
@@ -793,7 +809,7 @@ def collapse_duplicates(
     if candidates:
         llm = gigachat.build_llm()
         relations, alternatives_count, contradiction_count = judge_pairs(
-            llm, entries, candidates, cache, f"{label}: comparing pairs"
+            llm, domain, entries, candidates, cache, f"{label}: comparing pairs"
         )
 
         # An entry confirmed against a group member but never compared to that
@@ -803,7 +819,7 @@ def collapse_duplicates(
         if missing:
             logger.info("Checking %d indirectly confirmed pairs", len(missing))
             extra_relations, extra_alternatives, extra_contradictions = judge_pairs(
-                llm, entries, missing, cache, f"{label}: checking indirect pairs"
+                llm, domain, entries, missing, cache, f"{label}: checking indirect pairs"
             )
             relations.update(extra_relations)
             alternatives_count += extra_alternatives
@@ -828,7 +844,7 @@ def collapse_duplicates(
         with ThreadPoolExecutor(max_workers=config.WORKER_COUNT) as executor:
             futures = {
                 executor.submit(
-                    merge_group, merge_llm, entries, group, relations
+                    merge_group, merge_llm, domain, entries, group, relations
                 ): group.members[0]
                 for group in duplicate_groups
             }

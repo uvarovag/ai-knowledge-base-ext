@@ -1,86 +1,51 @@
-"""Single settings module for the knowledge base pipeline."""
+"""Technical settings shared by every run.
+
+What a run works on — the base, its source and output files, columns, domain,
+categories and merge strategy — is in the TOML config passed on the command
+line (kb/utils/settings.py).
+"""
 
 from __future__ import annotations
 
 from pathlib import Path
 from typing import Literal
 
-# ----- Dumps ---------------------------------------------------------------
-
-# Full paths to the support dumps to process. Every dump must have the same
-# column structure. The order matters: dumps are applied one after another and
-# a later dump updates matching entries of an earlier one, so list them from
-# the oldest to the freshest.
-DUMP_PATHS: tuple[Path, ...] = (
-    Path("/Users/19480633/Desktop/Обращения ПП.xlsx"),
-)
-
-# Reprocess every dump on each run, ignoring the ledger. For debugging.
+# Reprocess everything on each run, ignoring the dump ledger, the staging
+# files and the verdict caches. For debugging, or after editing the prompts.
 FORCE_REPROCESS = False
 
-# ----- Paths ---------------------------------------------------------------
+# ----- Technical storage ---------------------------------------------------
 
+# Everything a run keeps for itself; the files people read are written where
+# the TOML config of the run says.
 DATA_DIR = Path.cwd() / "data"
 
-STAGING_DIR = DATA_DIR / "staging"
-BACKUP_DIR = DATA_DIR / "backups"
+# One directory per base, named in its TOML config: the base JSON (the source
+# of truth), the ledger of processed dumps, staging, backups.
+BASES_DIR = DATA_DIR / "bases"
+# One directory per repair, named in its TOML config: staging and the JSON of
+# the repaired base.
+REPAIRS_DIR = DATA_DIR / "repairs"
 
 # Question embeddings, keyed by the hash of the question text, shared by every
-# step that searches for duplicates. Never needs clearing: the same text always
-# gets the same vector.
-EMBEDDINGS_CACHE = STAGING_DIR / "embeddings.npz"
+# base and every step that searches for duplicates. Never needs clearing: the
+# same text always gets the same vector.
+EMBEDDINGS_CACHE = DATA_DIR / "embeddings.npz"
 
 # Warnings and errors of every run, appended: why a model call failed.
 ERROR_LOG = DATA_DIR / "errors.log"
 
-KNOWLEDGE_BASE_JSON = DATA_DIR / "knowledge_base.json"
-KNOWLEDGE_BASE_XLSX = DATA_DIR / "knowledge_base.xlsx"
-PROCESSED_DUMPS_JSON = DATA_DIR / "processed_dumps.json"
+# ----- Source sheets -------------------------------------------------------
 
-# ----- Source columns ------------------------------------------------------
-
-# Columns of a dump joined into the question and the answer of one pair.
-QUESTION_COLUMNS: tuple[str, ...] = ("Описания обращения",)
-ANSWER_COLUMNS: tuple[str, ...] = ("Решение",)
+# Joins the columns of a row given in the TOML config into one question or
+# one answer.
 COLUMN_SEPARATOR = "\n"
-
-# Columns copied verbatim from the dump into every entry, for traceability.
-# When several tickets collapse into one entry, their values are listed
-# comma-separated in the same order as source_rows. Names must match the dump
-# headers exactly — run make inspect to check them. A column missing from a
-# dump is skipped with a warning, not an error.
-SOURCE_EXTRA_COLUMNS: tuple[str, ...] = (
-    "Обозначение ВидДокум",
-    "Направление закупки",
-    "Направление",
-    "Категория",
-    "Тема",
-)
 
 # Separator between the values of one column when an entry has several sources.
 SOURCE_VALUE_SEPARATOR = "| "
 
 # Row 1 is the header, so the first data row of the sheet is row 2.
 FIRST_DATA_ROW = 2
-
-# ----- Domain --------------------------------------------------------------
-
-# Named in every prompt so the model knows what it is reading. Keep it short
-# and put the product or department name here.
-DOMAIN_NAME = "Центра снабжения и офисных сервисов"
-
-# Categories offered to the model. The key is stored in the entry, the value is
-# shown to the model as the description of that key. Replace them with the
-# categories of your own domain; the prompts are built from this mapping.
-CATEGORIES: dict[str, str] = {
-    "how_to": "как выполнить действие: где найти, как создать, изменить, настроить",
-    "troubleshooting": "ошибки и сбои: что-то не работает, не открывается, не сохраняется",
-    "access": "доступы, роли, права, регистрация, вход, пароли",
-    "documents": "документы и файлы: загрузка, формирование, подписание, форматы",
-    "data": "данные и отчёты: выгрузки, поиск, проверка значений",
-    "policy": "правила, регламенты, сроки, зоны ответственности",
-    "other": "не подходит ни одна категория выше",
-}
 
 # ----- GigaChat ------------------------------------------------------------
 
@@ -207,34 +172,7 @@ MAX_ANSWER_WORDS_PER_CAUSE = 150
 # too low.
 MAX_CAUSES_PER_ENTRY = 8
 
-# ----- Merge strategy ------------------------------------------------------
-
-# What happens when an entry of the new dump answers a question that is already
-# in the knowledge base and the two answers name DIFFERENT causes:
-#
-# "accumulate" — both causes are kept and the entry is rewritten as a numbered
-#   list of possible causes. Use when a problem genuinely has several causes
-#   and support answers cover them one at a time.
-#
-# "replace" — the fresh answer wins and the old one is dropped. Use when the
-#   process changes often and an old answer is more likely outdated than
-#   complementary.
-#
-# Answers that simply say the same thing, and answers that contradict each
-# other, are always replaced by the fresh one under either strategy.
-MERGE_STRATEGY: Literal["accumulate", "replace"] = "accumulate"
-
 # ----- Repairing a base (scenario 2, make repair-base) ---------------------
-
-# The poor base to repair when make repair-base gets no FILE: an Excel sheet
-# whose first sheet holds a question and an answer per row. The defaults read a knowledge_base.xlsx this project
-# wrote, so a base can be fed back in as is.
-REPAIR_INPUT_PATH = DATA_DIR / "base_to_repair.xlsx"
-REPAIR_QUESTION_COLUMNS: tuple[str, ...] = ("Вопрос",)
-REPAIR_ANSWER_COLUMNS: tuple[str, ...] = ("Ответ",)
-
-# Columns copied from the input into every entry, for traceability.
-REPAIR_EXTRA_COLUMNS: tuple[str, ...] = ()
 
 # A base holds long regulatory answers that a repair can shorten only so far,
 # so its answers get a higher ceiling than MAX_ANSWER_WORDS, and the model a
@@ -243,17 +181,11 @@ REPAIR_EXTRA_COLUMNS: tuple[str, ...] = ()
 REPAIR_MAX_ANSWER_WORDS = 500
 REPAIR_MAX_TOKENS = 4000
 
-# Results of a repair go to REPAIRED_BASE_DIR/<input file stem>/:
-# knowledge_base.json and .xlsx, and rejected.xlsx with the rows left out. One
-# folder per input keeps parallel runs apart; the living base of scenario 1 is
-# never touched.
-REPAIRED_BASE_DIR = DATA_DIR / "repaired"
-
 # ----- Excel export --------------------------------------------------------
 
 SHEET_TITLE = "База знаний"
 
-# Base columns; one more column is appended per entry in SOURCE_EXTRA_COLUMNS.
+# Base columns; one more column is appended per extra column of the source.
 HEADERS: tuple[str, ...] = (
     "Вопрос",
     "Ответ",
@@ -264,7 +196,7 @@ HEADERS: tuple[str, ...] = (
 )
 COLUMN_WIDTHS: tuple[int, ...] = (50, 90, 22, 24, 18, 14)
 
-# Width used for every column added from SOURCE_EXTRA_COLUMNS.
+# Width used for every extra column of the source.
 EXTRA_COLUMN_WIDTH = 22
 
 # Sheet of the rows left out of a repaired base.

@@ -13,9 +13,9 @@ from typing import Any
 
 from pydantic import BaseModel, Field
 
-import config
 from kb.utils import gigachat, prompts
 from kb.utils.excel import SourcePair
+from kb.utils.settings import Domain
 
 # ----- Prompt --------------------------------------------------------------
 
@@ -258,18 +258,18 @@ class FilterVerdict(BaseModel):
     topic: str = Field(description="Тема пары в 3–8 словах, без номеров и имён")
 
 
-FILTER_SYSTEM_PROMPT = prompts.render_prompt(
-    FILTER_SYSTEM_PROMPT_TEMPLATE, domain=config.DOMAIN_NAME
-)
+def filter_system_prompt(domain: Domain) -> str:
+    return prompts.render_prompt(FILTER_SYSTEM_PROMPT_TEMPLATE, domain=domain.name)
+
 
 # ----- Filter --------------------------------------------------------------
 
 
-def run_filter(llm: Any, pair: SourcePair) -> dict[str, Any] | None:
+def run_filter(llm: Any, domain: Domain, pair: SourcePair) -> dict[str, Any] | None:
     """Score a pair against the reusability flags; None if the model failed."""
     return gigachat.invoke_structured(
         llm,
-        FILTER_SYSTEM_PROMPT,
+        filter_system_prompt(domain),
         FILTER_USER_PROMPT.format(question=pair.question, answer=pair.answer),
         schema=FilterVerdict,
         label=f"row {pair.row_number} filter",

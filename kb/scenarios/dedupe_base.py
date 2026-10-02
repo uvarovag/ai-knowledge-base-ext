@@ -11,36 +11,47 @@ config.EMBEDDING_BACKEND set to "none" the trigrams are the only signal and get
 the low config.TRIGRAM_ONLY_CANDIDATE_THRESHOLD: this is a one-off clean-up,
 so many model calls are acceptable where the pipeline could not afford them.
 
-The base is backed up before anything is written. Verdicts are cached by
-content in data/staging/base_dedupe/, so a run can be interrupted and resumed,
-and a run over a base that changed since does not pick up stale verdicts.
+The TOML config names the base, under config.BASES_DIR/<name>/, the folder
+the cleaned Excel view goes to and the domain the merge prompts are told
+about; it has no source file. The base is backed up before anything is
+written. Verdicts are cached by content in the staging directory of the base,
+so a run can be interrupted and resumed, and a run over a base that changed
+since does not pick up stale verdicts.
 
 Usage:
-    make dedupe-base
+    make dedupe-base CONFIG=configs/<base>-dedupe.toml
 """
 
 from __future__ import annotations
 
+import argparse
+from pathlib import Path
+
 import config
 from kb.steps import dedup, matching
-from kb.utils import excel, logs, storage
+from kb.utils import excel, logs, settings, storage
 from kb.utils.logs import logger
-
-STAGING_DIR = config.STAGING_DIR / "base_dedupe"
 
 
 def main() -> None:
-    logs.configure_logging()
+    parser = argparse.ArgumentParser(description="Deduplicate a living base.")
+    parser.add_argument("config", type=Path, help="TOML config of the clean-up")
+    base = settings.load(settings.DedupeSettings, parser.parse_args().config)
 
-    entries = storage.load_json(config.KNOWLEDGE_BASE_JSON)
+    logs.configure_logging()
+    entries = storage.load_json(base.base_json)
     if not entries:
-        logger.info("Base is empty, nothing to deduplicate")
+        logger.info(
+            "Base %s is empty or missing (%s), nothing to deduplicate",
+            base.name,
+            base.base_json,
+        )
         return
 
-    backup_path = storage.backup_file(config.KNOWLEDGE_BASE_JSON)
+    backup_path = storage.backup_file(base.base_json, base.backup_dir)
     logger.info("Backed up base to %s", backup_path)
 
-    cache_path = STAGING_DIR / "verdicts.json"
+    cache_path = base.staging_dir / "base_dedupe" / "verdicts.json"
     if config.FORCE_REPROCESS and cache_path.exists():
         cache_path.unlink()
 
@@ -66,12 +77,14 @@ def main() -> None:
     )
 
     result = dedup.collapse_duplicates(
-        entries, candidates, dedup.VerdictCache(cache_path, entries), "Base dedup"
+        base.domain,
+        entries,
+        candidates,
+        dedup.VerdictCache(cache_path, entries),
+        "Base dedup",
     )
-    storage.save_json(config.KNOWLEDGE_BASE_JSON, result)
-    excel.write_knowledge_base(
-        result, config.KNOWLEDGE_BASE_XLSX, config.SOURCE_EXTRA_COLUMNS
-    )
+    storage.save_json(base.base_json, result)
+    excel.write_knowledge_base(result, base.output_file())
 
 
 if __name__ == "__main__":

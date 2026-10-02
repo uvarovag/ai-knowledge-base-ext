@@ -1,8 +1,8 @@
 """Merge one deduplicated batch into the living knowledge base.
 
-For every new entry the script looks for the same question in the current base.
-What happens to a match depends on config.MERGE_STRATEGY and on how the two
-answers relate:
+For every new entry the step looks for the same question in the current base.
+What happens to a match depends on the merge strategy of the base (its TOML
+config) and on how the two answers relate:
 
 - answers say the same thing        -> the fresh entry replaces the old one;
 - answers contradict each other     -> the fresh entry replaces the old one,
@@ -30,9 +30,10 @@ from pydantic import BaseModel, Field
 
 import config
 from kb.steps import dedup, matching
-from kb.utils import gigachat, logs, prompts, storage
+from kb.utils import gigachat, logs, prompts
 from kb.utils.entries import merged_entry
 from kb.utils.logs import logger
+from kb.utils.settings import Domain, MergeStrategy
 
 # ----- Prompt --------------------------------------------------------------
 
@@ -124,9 +125,10 @@ MATCH_USER_PROMPT = """Старая запись.
 Ответ: {new_answer}
 """
 
-MATCH_SYSTEM_PROMPT = prompts.render_prompt(
-    MATCH_SYSTEM_PROMPT_TEMPLATE, domain=config.DOMAIN_NAME
-)
+
+def match_system_prompt(domain: Domain) -> str:
+    return prompts.render_prompt(MATCH_SYSTEM_PROMPT_TEMPLATE, domain=domain.name)
+
 
 
 class MatchVerdict(BaseModel):
@@ -153,6 +155,7 @@ class Match:
 
 def check_match(
     llm: Any,
+    domain: Domain,
     new_entries: list[dict[str, Any]],
     base_entries: list[dict[str, Any]],
     pair: tuple[int, int],
@@ -166,7 +169,7 @@ def check_match(
     label = f"match new {new_index} / base {base_index}"
     verdict = gigachat.invoke_structured(
         llm,
-        MATCH_SYSTEM_PROMPT,
+        match_system_prompt(domain),
         MATCH_USER_PROMPT.format(
             base_question=base_entries[base_index]["question"],
             base_answer=base_entries[base_index]["answer"],
@@ -185,6 +188,7 @@ def check_match(
 
 
 def judge_matches(
+    domain: Domain,
     new_entries: list[dict[str, Any]],
     base_entries: list[dict[str, Any]],
     candidates: list[tuple[int, int]],
@@ -219,7 +223,7 @@ def judge_matches(
     bar = logs.ProgressBar(len(pending), "Merge: matching against base")
     with ThreadPoolExecutor(max_workers=config.WORKER_COUNT) as executor:
         futures = [
-            executor.submit(check_match, llm, new_entries, base_entries, pair)
+            executor.submit(check_match, llm, domain, new_entries, base_entries, pair)
             for pair in pending
         ]
         for future in as_completed(futures):
@@ -269,16 +273,15 @@ def select_matches(confirmed: list[Match]) -> dict[int, Match]:
 # ----- Update --------------------------------------------------------------
 
 
-def should_accumulate(match: Match) -> bool:
+def should_accumulate(match: Match, strategy: MergeStrategy) -> bool:
     """Tell whether the matched entries are folded into a list of causes."""
-    return (
-        config.MERGE_STRATEGY == "accumulate"
-        and match.relation == dedup.RELATION_ALTERNATIVES
-    )
+    return strategy == "accumulate" and match.relation == dedup.RELATION_ALTERNATIVES
 
 
 def build_updated_entry(
     llm: Any,
+    domain: Domain,
+    strategy: MergeStrategy,
     match: Match,
     new_entries: list[dict[str, Any]],
     base_entries: list[dict[str, Any]],
@@ -289,7 +292,7 @@ def build_updated_entry(
     folded together with the old one; otherwise the fresh entry simply wins.
     """
     new_entry = new_entries[match.new_index]
-    if not should_accumulate(match):
+    if not should_accumulate(match, strategy):
         return new_entry
 
     base_entry = base_entries[match.base_index]
@@ -297,7 +300,7 @@ def build_updated_entry(
     label = f"accumulate base {match.base_index} / new {match.new_index}"
 
     merged = dedup.merge_entries(
-        llm, group_entries, as_variants=True, label=label
+        llm, domain, group_entries, as_variants=True, label=label
     )
     if merged is None:
         logger.warning("%s: keeping the fresh entry as is", label)
@@ -309,23 +312,26 @@ def build_updated_entry(
 
 
 def merge_into_base(
-    new_entries: list[dict[str, Any]], staging_dir: Path
-) -> tuple[int, int]:
-    """Merge a batch into the living base, backing it up first.
+    domain: Domain,
+    strategy: MergeStrategy,
+    base_entries: list[dict[str, Any]],
+    new_entries: list[dict[str, Any]],
+    staging_dir: Path,
+) -> tuple[list[dict[str, Any]], int, int]:
+    """Merge a batch into the entries of a base.
 
-    Match verdicts are cached in staging_dir. Returns the number of updated
-    and of added entries.
+    Match verdicts are cached in staging_dir. Returns the merged entries, the
+    number of updated and the number of added ones.
     """
     if not new_entries:
         logger.warning("Nothing to merge into the base")
-        return 0, 0
+        return base_entries, 0, 0
 
-    base_entries = storage.load_json(config.KNOWLEDGE_BASE_JSON)
     logger.info(
         "Merging %d new entries into a base of %d, strategy: %s",
         len(new_entries),
         len(base_entries),
-        config.MERGE_STRATEGY,
+        strategy,
     )
 
     confirmed: list[Match] = []
@@ -335,10 +341,12 @@ def merge_into_base(
         if config.FORCE_REPROCESS and cache_path.exists():
             cache_path.unlink()
         cache = dedup.VerdictCache(cache_path, new_entries, base_entries)
-        confirmed = judge_matches(new_entries, base_entries, candidates, cache)
+        confirmed = judge_matches(domain, new_entries, base_entries, candidates, cache)
 
     matches = select_matches(confirmed)
-    accumulated_count = sum(should_accumulate(match) for match in matches.values())
+    accumulated_count = sum(
+        should_accumulate(match, strategy) for match in matches.values()
+    )
     logger.info(
         "Confirmed %d matches, %d of them merged as lists of possible causes",
         len(matches),
@@ -352,7 +360,13 @@ def merge_into_base(
         with ThreadPoolExecutor(max_workers=config.WORKER_COUNT) as executor:
             futures = {
                 executor.submit(
-                    build_updated_entry, llm, match, new_entries, base_entries
+                    build_updated_entry,
+                    llm,
+                    domain,
+                    strategy,
+                    match,
+                    new_entries,
+                    base_entries,
                 ): match.base_index
                 for match in matches.values()
             }
@@ -372,16 +386,10 @@ def merge_into_base(
         if index not in matched_new_indices
     ]
     result.extend(added)
-
-    backup_path = storage.backup_file(config.KNOWLEDGE_BASE_JSON)
-    if backup_path:
-        logger.info("Previous base backed up to %s", backup_path)
-
-    storage.save_json(config.KNOWLEDGE_BASE_JSON, result)
     logger.info(
         "Base updated: %d updated, %d added, %d entries total",
         len(matches),
         len(added),
         len(result),
     )
-    return len(matches), len(added)
+    return result, len(matches), len(added)

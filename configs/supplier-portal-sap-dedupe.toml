@@ -1,0 +1,25 @@
+# make dedupe-base CONFIG=configs/supplier-portal-sap-dedupe.toml —
+# deduplicate the base against itself.
+
+# The base to clean, in data/bases/<name>/. Also the start of the output file
+# name: <name>_<date>.xlsx.
+name = "Портал поставщика SAP"
+
+# Folder the Excel view of the cleaned base is written to.
+output_dir = "output"
+
+# What the model is told about the domain.
+[domain]
+# Substituted into every prompt: «служба поддержки <name>».
+name = "портала поставщика SAP"
+
+# Categories offered to the model: the key is stored in the entry, the value is
+# shown to the model as its description.
+[domain.categories]
+how_to = "как выполнить действие: где найти, как создать, изменить, настроить"
+troubleshooting = "ошибки и сбои: что-то не работает, не открывается, не сохраняется"
+access = "доступы, роли, права, регистрация, вход, пароли"
+documents = "документы и файлы: загрузка, формирование, подписание, форматы"
+data = "данные и отчёты: выгрузки, поиск, проверка значений"
+policy = "правила, регламенты, сроки, зоны ответственности"
+other = "не подходит ни одна категория выше"

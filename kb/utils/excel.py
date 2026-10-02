@@ -126,14 +126,19 @@ def write_sheet(
     workbook.save(path)
 
 
-def write_knowledge_base(
-    entries: list[dict[str, Any]], path: Path, extra_columns: Sequence[str]
-) -> None:
+def write_knowledge_base(entries: list[dict[str, Any]], path: Path) -> None:
     """Write a base as a review-friendly sheet, sorted by category and question.
 
     Besides the base columns the sheet carries one column per extra source
-    column, so a reviewer can trace an entry back to its tickets.
+    column the entries hold, in the order first seen, so a reviewer can trace
+    an entry back to its tickets. They are taken from the entries, not from a
+    config: a base grown from dumps with different columns keeps all of them.
     """
+    extra_columns = list(
+        dict.fromkeys(
+            column for entry in entries for column in entry.get("source_columns", {})
+        )
+    )
     rows = [
         [
             entry["question"],
