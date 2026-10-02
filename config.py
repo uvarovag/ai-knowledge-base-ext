@@ -19,7 +19,7 @@ FORCE_REPROCESS = False
 # One working folder: «Базы» holds the Excel files of the bases (output_dir of
 # the TOML configs), «Обращения» the dumps of tickets, and «Технические данные»
 # everything the runs keep for themselves.
-KNOWLEDGE_BASES_DIR = Path("/Users/19480633/Desktop/Базы занний")
+KNOWLEDGE_BASES_DIR = Path("/Users/19480633/Desktop/Базы знаний")
 DATA_DIR = KNOWLEDGE_BASES_DIR / "Технические данные"
 
 # One directory per base, named in its TOML config: the base JSON (the source

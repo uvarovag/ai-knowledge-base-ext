@@ -7,11 +7,11 @@
 name = "Обеспечка агент ЦС"
 
 # Folder the repaired base and the rows left out are written to.
-output_dir = "/Users/19480633/Desktop/Базы занний/Базы"
+output_dir = "/Users/19480633/Desktop/Базы знаний/Готовые базы"
 
 # The base to repair: the first sheet holds a question and an answer per row.
 [input]
-path = "/Users/19480633/Desktop/Базы занний/Базы/Обеспечка агент ЦС 01.10.xlsx"
+path = "/Users/19480633/Desktop/Базы знаний/Исходные базы/Обеспечка агент ЦС 01.10.xlsx"
 question_columns = ["Вопрос"]
 answer_columns = ["Ответ"]
 extra_columns = []

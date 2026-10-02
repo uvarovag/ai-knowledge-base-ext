@@ -33,7 +33,7 @@ Two levels, never mixed:
 
 - **`config.py`** — technical settings shared by every run: GigaChat, retries, workers,
   thresholds, word limits, Excel styling, and the storage: `KNOWLEDGE_BASES_DIR`
-  (`/Users/19480633/Desktop/Базы занний`, the working folder: «Базы» — the Excel files of the bases,
+  (`/Users/19480633/Desktop/Базы знаний`, the working folder: «Базы» — the Excel files of the bases,
   `output_dir` of every config; «Обращения» — the dumps) and in it `DATA_DIR`
   («Технические данные»: `BASES_DIR`, `REPAIRS_DIR`, `EMBEDDINGS_CACHE`, `TOOLS_LOG_DIR`).
 - **A TOML config per run** (`configs/`), the only command-line argument of every script

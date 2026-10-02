@@ -7,7 +7,7 @@
 name = "Портал поставщика SAP"
 
 # Folder the Excel view of the base is written to.
-output_dir = "/Users/19480633/Desktop/Базы занний/Базы"
+output_dir = "/Users/19480633/Desktop/Базы знаний/Готовые базы"
 
 # An entry of the good base answers a question already in this base with a
 # DIFFERENT cause:
@@ -20,7 +20,7 @@ merge_strategy = "accumulate"
 # replace the example with the file to merge. A file already merged into the
 # base (same content) is skipped.
 [source]
-path = "/Users/19480633/Desktop/Базы занний/Базы/Хорошая база_2026-10-02.xlsx"
+path = "/Users/19480633/Desktop/Базы знаний/Готовые базы/Хорошая база_2026-10-02.xlsx"
 
 # What the model is told about the domain.
 [domain]

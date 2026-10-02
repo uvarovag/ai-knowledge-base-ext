@@ -6,7 +6,7 @@
 name = "Портал поставщика SAP"
 
 # Folder the Excel view of the cleaned base is written to.
-output_dir = "/Users/19480633/Desktop/Базы занний/Базы"
+output_dir = "/Users/19480633/Desktop/Базы знаний/Готовые базы"
 
 # What the model is told about the domain.
 [domain]
