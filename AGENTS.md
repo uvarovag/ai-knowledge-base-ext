@@ -301,8 +301,13 @@ categories; `EMBEDDING_CANDIDATE_THRESHOLD` / `EMBEDDING_TOP_K` bound the embedd
 
 `prompts.render_prompt` does literal `<<KEY>>` substitution — not `str.format`, because templates
 contain literal `{` `}` from JSON examples. Every GigaChat call, chat and embeddings, goes through
-`gigachat.call_with_retries`: a failure — a GigaChat error, a failed validation, a reply without the
-function call — uses one of `MAX_RETRIES` (10) attempts with a growing pause and is logged with the
+`gigachat.call_with_retries`. A `FinalReply` ends the call at once, since the same request gets the
+same reply: `Blocked` (`finish_reason=blacklist`, GigaChat's own content filter) and `CutOff`
+(`finish_reason=length`, the budget ran out; the log says to raise `GIGACHAT_MAX_TOKENS`).
+`batch.run_worker` turns a row failed by `Blocked` into the rejection `batch.BLOCKED_REASON`, never
+retried; a `CutOff` row stays a failure, retried on the next run. Any other failure — a GigaChat
+error, a failed validation, a reply without the function call — uses one of `MAX_RETRIES` (10)
+attempts with a growing pause and is logged with the
 model's raw reply (`describe_reply`); a 429 uses none — every thread of the process waits out one
 shared cooldown that doubles while 429s keep coming (`RATE_LIMIT_*`), so the process backs off as a
 whole; the host dropping is waited out by `wait_for_network`. The cooldown is per process: parallel
