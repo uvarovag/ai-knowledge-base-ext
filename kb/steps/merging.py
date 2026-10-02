@@ -13,7 +13,9 @@ config) and on how the two answers relate:
 
 Matching is one to one: a new entry updates at most one entry of the base, and
 an entry of the base is updated by at most one new entry. Entries with no match
-are appended.
+are appended, and so is a new entry the model failed to fold into its match:
+the old cause stays, the new one lands next to it, and dedupe-base can merge
+them later.
 
 Verdicts are cached in the staging directory of the dump, so an interrupted
 merge does not ask the model about the same pairs again.
@@ -21,7 +23,7 @@ merge does not ask the model about the same pairs again.
 
 from __future__ import annotations
 
-from concurrent.futures import ThreadPoolExecutor, as_completed
+from concurrent.futures import as_completed
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -30,7 +32,7 @@ from pydantic import BaseModel, Field
 
 import config
 from kb.steps import dedup, matching
-from kb.utils import gigachat, logs, prompts
+from kb.utils import gigachat, logs, parallel, prompts
 from kb.utils.entries import merged_entry
 from kb.utils.logs import logger
 from kb.utils.settings import Domain, MergeStrategy
@@ -222,29 +224,39 @@ def judge_matches(
     llm = gigachat.build_llm()
     completed = 0
     bar = logs.ProgressBar(len(pending), "Merge: matching against base")
-    with ThreadPoolExecutor(max_workers=config.WORKER_COUNT) as executor:
-        futures = [
-            executor.submit(check_match, llm, domain, new_entries, base_entries, pair)
-            for pair in pending
-        ]
-        for future in as_completed(futures):
-            pair, relation = future.result()
-            if relation is None:
-                title = logs.describe_pair(new_entries[pair[0]], base_entries[pair[1]])
-                bar.print(logs.render_item(title, "no verdict, added as new", [], True))
-                bar.advance(failed=1)
-                continue
-            cache.add(pair, relation)
-            register(pair, relation)
-            if relation == dedup.VerdictCache.UNIQUE:
-                bar.advance(new=1)
-            else:
-                bar.advance(matched=1)
-            completed += 1
-            if completed % config.SAVE_EVERY == 0:
-                cache.save()
+    # The cache is saved on the way out too, so an interrupted run keeps every
+    # verdict received.
+    try:
+        with parallel.workers() as executor:
+            futures = [
+                executor.submit(
+                    check_match, llm, domain, new_entries, base_entries, pair
+                )
+                for pair in pending
+            ]
+            for future in as_completed(futures):
+                pair, relation = future.result()
+                if relation is None:
+                    title = logs.describe_pair(
+                        new_entries[pair[0]], base_entries[pair[1]]
+                    )
+                    bar.print(
+                        logs.render_item(title, "no verdict, added as new", [], True)
+                    )
+                    bar.advance(failed=1)
+                    continue
+                cache.add(pair, relation)
+                register(pair, relation)
+                if relation == dedup.VerdictCache.UNIQUE:
+                    bar.advance(new=1)
+                else:
+                    bar.advance(matched=1)
+                completed += 1
+                if completed % config.SAVE_EVERY == 0:
+                    cache.save()
+    finally:
+        cache.save()
     bar.finish()
-    cache.save()
     return confirmed
 
 
@@ -288,11 +300,13 @@ def build_updated_entry(
     match: Match,
     new_entries: list[dict[str, Any]],
     base_entries: list[dict[str, Any]],
-) -> dict[str, Any]:
+) -> dict[str, Any] | None:
     """Produce the entry that replaces a matched entry of the base.
 
     Under the accumulate strategy an entry whose answer names another cause is
     folded together with the old one; otherwise the fresh entry simply wins.
+    Returns None when that folding fails: neither cause may be lost, so both
+    entries are kept.
     """
     new_entry = new_entries[match.new_index]
     if not should_accumulate(match, strategy):
@@ -312,8 +326,8 @@ def build_updated_entry(
         llm, domain, group_entries, as_variants=True, label=label
     )
     if merged is None:
-        logger.warning("%s: keeping the fresh entry as is", label)
-        return new_entry
+        logger.warning("%s: keeping both entries apart", label)
+        return None
     return merged_entry(merged, group_entries)
 
 
@@ -366,7 +380,7 @@ def merge_into_base(
     if matches:
         llm = gigachat.build_llm(max_tokens=config.MERGE_MAX_TOKENS)
         bar = logs.ProgressBar(len(matches), "Merge: updating entries")
-        with ThreadPoolExecutor(max_workers=config.WORKER_COUNT) as executor:
+        with parallel.workers() as executor:
             futures = {
                 executor.submit(
                     build_updated_entry,
@@ -380,25 +394,34 @@ def merge_into_base(
                 for match in matches.values()
             }
             for future in as_completed(futures):
-                updated_by_base_index[futures[future]] = future.result()
-                bar.advance(updated=1)
+                updated = future.result()
+                if updated is None:
+                    bar.advance(kept_apart=1)
+                else:
+                    updated_by_base_index[futures[future]] = updated
+                    bar.advance(updated=1)
         bar.finish()
 
     result = [
         updated_by_base_index.get(base_index, entry)
         for base_index, entry in enumerate(base_entries)
     ]
-    matched_new_indices = {match.new_index for match in matches.values()}
+    # A new entry whose match failed to fold in is added next to the old one.
+    folded_new_indices = {
+        match.new_index
+        for base_index, match in matches.items()
+        if base_index in updated_by_base_index
+    }
     added = [
         entry
         for index, entry in enumerate(new_entries)
-        if index not in matched_new_indices
+        if index not in folded_new_indices
     ]
     result.extend(added)
     logger.info(
         "Base updated: %d updated, %d added, %d entries total",
-        len(matches),
+        len(updated_by_base_index),
         len(added),
         len(result),
     )
-    return result, len(matches), len(added)
+    return result, len(updated_by_base_index), len(added)

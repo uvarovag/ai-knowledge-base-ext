@@ -12,13 +12,13 @@ is written to the rejections for the reviewer, but processed again on resume.
 from __future__ import annotations
 
 from collections.abc import Callable
-from concurrent.futures import ThreadPoolExecutor, as_completed
+from concurrent.futures import as_completed
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
 import config
-from kb.utils import gigachat, storage
+from kb.utils import gigachat, parallel, storage
 from kb.utils.excel import SourcePair
 from kb.utils.logs import ModelCall, ProgressBar, logger, recording_calls, render_item
 
@@ -90,9 +90,9 @@ def process_rows(
     """Run the worker over every row not processed yet; return entries and rejections.
 
     The worker gets a shared chat client, with max_tokens of output, and one
-    row. Results are saved every config.SAVE_EVERY rows and at the end, sorted
-    by source row. A row left out is printed above the progress bar with its
-    model calls.
+    row. Results are saved every config.SAVE_EVERY rows and at the end, an
+    interrupted end too, sorted by source row. A row left out is printed above
+    the progress bar with its model calls.
     """
     if config.FORCE_REPROCESS:
         entries: list[dict[str, Any]] = []
@@ -120,51 +120,53 @@ def process_rows(
         storage.save_json(rejected_path, rejected)
 
     private_data_seen = 0
-    if pending:
-        llm = gigachat.build_llm(max_tokens=max_tokens)
-        bar = ProgressBar(len(pending), label)
-        completed = 0
-        # Only the workers run in parallel; every result is folded in here, on
-        # the main thread, so the lists need no lock.
-        with ThreadPoolExecutor(max_workers=config.WORKER_COUNT) as executor:
-            futures = {
-                executor.submit(run_worker, worker, llm, pair): pair for pair in pending
-            }
-            for future in as_completed(futures):
-                pair = futures[future]
-                outcome, calls = future.result()
+    try:
+        if pending:
+            llm = gigachat.build_llm(max_tokens=max_tokens)
+            bar = ProgressBar(len(pending), label)
+            completed = 0
+            # Only the workers run in parallel; every result is folded in here,
+            # on the main thread, so the lists need no lock.
+            with parallel.workers() as executor:
+                futures = {
+                    executor.submit(run_worker, worker, llm, pair): pair
+                    for pair in pending
+                }
+                for future in as_completed(futures):
+                    pair = futures[future]
+                    outcome, calls = future.result()
 
-                if outcome.entry is not None:
-                    entries.append(outcome.entry)
-                    private_data_seen += outcome.had_private_data
-                    bar.advance(
-                        **{"doubtful" if outcome.entry.get("doubtful") else "accepted": 1}
-                    )
-                else:
-                    record = {
-                        "source_row": pair.row_number,
-                        "reason": outcome.reason or "unknown",
-                        "topic": outcome.topic,
-                        "question": pair.question,
-                        "answer": pair.answer,
-                    }
-                    if outcome.model_fields is not None:
-                        record["model_question"] = outcome.model_fields.get("question")
-                        record["model_answer"] = outcome.model_fields.get("answer")
-                    rejected.append(record)
-                    failed = is_failure(record["reason"])
-                    bar.print(
-                        render_item(
-                            f"row {pair.row_number}", record["reason"], calls, failed
-                        )
-                    )
-                    bar.advance(**{"failed" if failed else "rejected": 1})
+                    if outcome.entry is not None:
+                        entries.append(outcome.entry)
+                        private_data_seen += outcome.had_private_data
+                        doubtful = bool(outcome.entry.get("doubtful"))
+                        bar.advance(**{"doubtful" if doubtful else "accepted": 1})
+                    else:
+                        record = {
+                            "source_row": pair.row_number,
+                            "reason": outcome.reason or "unknown",
+                            "topic": outcome.topic,
+                            "question": pair.question,
+                            "answer": pair.answer,
+                        }
+                        if outcome.model_fields is not None:
+                            fields = outcome.model_fields
+                            record["model_question"] = fields.get("question")
+                            record["model_answer"] = fields.get("answer")
+                        rejected.append(record)
+                        failed = is_failure(record["reason"])
+                        title = f"row {pair.row_number}"
+                        bar.print(render_item(title, record["reason"], calls, failed))
+                        bar.advance(**{"failed" if failed else "rejected": 1})
 
-                completed += 1
-                if completed % config.SAVE_EVERY == 0:
-                    save()
-        bar.finish()
-    save()
+                    completed += 1
+                    if completed % config.SAVE_EVERY == 0:
+                        save()
+            bar.finish()
+    finally:
+        # Saved on the way out of an interrupted run too: every row finished
+        # since the last periodic save is kept.
+        save()
 
     log_summary(entries, rejected, len(pairs))
     if private_data_seen:

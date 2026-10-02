@@ -32,7 +32,7 @@ when it folds a fresh entry into an existing one of the base.
 
 from __future__ import annotations
 
-from concurrent.futures import ThreadPoolExecutor, as_completed
+from concurrent.futures import as_completed
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Literal
@@ -40,7 +40,7 @@ from typing import Any, Literal
 from pydantic import BaseModel, Field
 
 import config
-from kb.utils import gigachat, links, logs, prompts, storage
+from kb.utils import gigachat, links, logs, parallel, prompts, storage
 from kb.utils.entries import entry_schema, merge_sources, merged_entry, validate_entry
 from kb.utils.logs import logger
 from kb.utils.settings import Domain
@@ -466,45 +466,52 @@ def judge_pairs(
     bar = logs.ProgressBar(len(pending), label)
 
     # Only the workers run in parallel; every result is folded in here, on the
-    # main thread, so the cache needs no lock.
-    with ThreadPoolExecutor(max_workers=config.WORKER_COUNT) as executor:
-        futures = [
-            executor.submit(check_pair, llm, domain, entries, pair) for pair in pending
-        ]
-        for future in as_completed(futures):
-            pair, verdict = future.result()
-            title = logs.describe_pair(entries[pair[0]], entries[pair[1]])
-            if verdict is None:
-                logger.warning("Pair %s: no verdict, keeping both entries", pair)
-                bar.print(logs.render_item(title, "no verdict, both kept", [], True))
-                bar.advance(failed=1)
-                continue
-
-            if verdict.get("duplicate") is not True:
-                relation = VerdictCache.UNIQUE
-                bar.advance(unique=1)
-            else:
-                relation = verdict["answers_relation"]
-                if relation == RELATION_CONTRADICTION:
-                    logger.warning(
-                        "Pair %s: answers contradict each other, keeping both (%s)",
-                        pair,
-                        verdict.get("reason"),
+    # main thread, so the cache needs no lock. It is saved on the way out too,
+    # so an interrupted run keeps every verdict received.
+    try:
+        with parallel.workers() as executor:
+            futures = [
+                executor.submit(check_pair, llm, domain, entries, pair)
+                for pair in pending
+            ]
+            for future in as_completed(futures):
+                pair, verdict = future.result()
+                title = logs.describe_pair(entries[pair[0]], entries[pair[1]])
+                if verdict is None:
+                    logger.warning("Pair %s: no verdict, keeping both entries", pair)
+                    bar.print(
+                        logs.render_item(title, "no verdict, both kept", [], True)
                     )
-                    reason = f"answers contradict, both kept: {verdict.get('reason')}"
-                    bar.print(logs.render_item(title, reason, [], False))
-                    bar.advance(conflicts=1)
+                    bar.advance(failed=1)
+                    continue
+
+                if verdict.get("duplicate") is not True:
+                    relation = VerdictCache.UNIQUE
+                    bar.advance(unique=1)
                 else:
-                    bar.advance(duplicates=1)
+                    relation = verdict["answers_relation"]
+                    if relation == RELATION_CONTRADICTION:
+                        logger.warning(
+                            "Pair %s: answers contradict each other, keeping both (%s)",
+                            pair,
+                            verdict.get("reason"),
+                        )
+                        reason = (
+                            f"answers contradict, both kept: {verdict.get('reason')}"
+                        )
+                        bar.print(logs.render_item(title, reason, [], False))
+                        bar.advance(conflicts=1)
+                    else:
+                        bar.advance(duplicates=1)
 
-            cache.add(pair, relation)
-            register(pair, relation)
-            completed += 1
-            if completed % config.SAVE_EVERY == 0:
-                cache.save()
-
+                cache.add(pair, relation)
+                register(pair, relation)
+                completed += 1
+                if completed % config.SAVE_EVERY == 0:
+                    cache.save()
+    finally:
+        cache.save()
     bar.finish()
-    cache.save()
 
     return relations, alternatives_count, contradiction_count
 
@@ -852,7 +859,7 @@ def collapse_duplicates(
     if duplicate_groups:
         merge_llm = gigachat.build_llm(max_tokens=config.MERGE_MAX_TOKENS)
         bar = logs.ProgressBar(len(duplicate_groups), f"{label}: merging groups")
-        with ThreadPoolExecutor(max_workers=config.WORKER_COUNT) as executor:
+        with parallel.workers() as executor:
             futures = {
                 executor.submit(
                     merge_group, merge_llm, domain, entries, group, relations

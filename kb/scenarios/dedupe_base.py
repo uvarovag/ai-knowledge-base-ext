@@ -13,7 +13,7 @@ so many model calls are acceptable where the pipeline could not afford them.
 
 The TOML config names the base, under config.BASES_DIR/<name>/, the folder
 the cleaned Excel view goes to and the domain the merge prompts are told
-about; it has no source file. The base is backed up before anything is
+about; it has no source file. The base is backed up right before it is
 written. Verdicts are cached by content in the staging directory of the base,
 so a run can be interrupted and resumed, and a run over a base that changed
 since does not pick up stale verdicts.
@@ -48,9 +48,6 @@ def main() -> None:
             )
             return
 
-        backup_path = storage.backup_file(base.base_json, base.backup_dir)
-        logger.info("Backed up base to %s", backup_path)
-
         cache_path = base.staging_dir / "base_dedupe" / "verdicts.json"
         if config.FORCE_REPROCESS and cache_path.exists():
             cache_path.unlink()
@@ -83,6 +80,8 @@ def main() -> None:
             dedup.VerdictCache(cache_path, entries),
             "Base dedup",
         )
+        backup_path = storage.backup_file(base.base_json, base.backup_dir)
+        logger.info("Previous base backed up to %s", backup_path)
         storage.save_json(base.base_json, result)
         excel.write_knowledge_base(result, base.output_file())
 
