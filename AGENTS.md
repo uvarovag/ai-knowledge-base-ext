@@ -68,7 +68,8 @@ Every command is a module run with `python -m` from the repository root (see the
 There is no test suite, linter or type-checker in this repo — don't invent commands for them.
 `requirements.txt` is pinned by hand; `make setup` installs it.
 
-A run can be interrupted with Ctrl+C and resumed by running it again; see "Resumability". To
+A run can be interrupted with Ctrl+C and resumed by running it again; see "Resumability". Ctrl+C
+cancels the queued model calls and waits only for the running ones (`parallel.workers`). To
 reprocess everything from scratch (e.g. after editing prompts), set `FORCE_REPROCESS = True` in
 `config.py`: it ignores the dump ledger, the staging files and the verdict caches.
 
@@ -146,7 +147,8 @@ the runs. Everything else lives in `kb/`:
   placeholders), `entries` (the `Entry` schema, `validate_entry`, provenance, `new_entry` /
   `merged_entry`), `excel` (`read_pairs` from any sheet by configured columns, `write_knowledge_base`,
   `write_rejected`), `batch` (`process_rows`: resumable parallel row processing into entries and
-  rejections).
+  rejections), `parallel` (`workers`: the thread pool of every parallel step, whose queue an
+  exception cancels).
 - **`kb/steps/`** — one transformation each, on lists of entries, with its prompt and schema:
   `filtering`, `rewriting`, `repairing`, `matching`, `dedup`, `merging`.
 - **`kb/scenarios/`** — entry points that compose the steps: `tickets_to_base`, `dedupe_base`,
@@ -184,7 +186,8 @@ updates matching entries from earlier ones:
    signals. `merging` works on lists; the scenario loads, backs up and saves the base. On a matched
    entry with differing answers `merge_strategy` of the config decides:
    `"accumulate"` appends the new cause, `"replace"` lets the fresh answer win. Answers that say
-   the same thing, or contradict each other, are always replaced by the fresh one.
+   the same thing, or contradict each other, are always replaced by the fresh one. A cause the
+   model fails to append is not lost: the old entry stays and the new one is added next to it.
 
 **`dedupe_base`** (`make dedupe-base`) is run by hand: it compares the entries already in the base
 against each other, which scenario 1 never does (and one-to-one matching leaves a second duplicate
@@ -239,7 +242,8 @@ Per-source state lives in `<base work dir>/staging/<stem>-<hash-prefix>/`
 original): `batch.process_rows` skips rows already in the accepted or rejected file (rows
 that _failed_ rather than got rejected are retried — a failure is not a verdict); `dedup` reuses
 verdicts from `verdicts.json` and `merging` from `match_verdicts.json` (`dedup.VerdictCache`, keyed
-by the content hashes of the two entries, never by their positions). Question embeddings are cached
+by the content hashes of the two entries, never by their positions). Rows and verdicts are saved
+every `SAVE_EVERY` items and on the way out, an interrupted run included. Question embeddings are cached
 once for every step and every base in `data/embeddings.npz`, keyed by question text. The base
 is copied to `data/bases/<name>/backups/` before every write; writes are atomic (temp file + `os.replace`,
 `storage.save_json`).
