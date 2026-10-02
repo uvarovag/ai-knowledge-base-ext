@@ -1,15 +1,44 @@
-"""Logging and progress reporting shared by every command."""
+"""Terminal and log file of a run.
+
+The terminal shows what a person watches: the progress of every step, the
+rows that went wrong above the bar, and in the end the model calls summed up
+by step. Warnings and errors — a failed attempt with the model's raw reply, a
+rejected merge — go to the run's own log file, written only when there is
+something to write: thousands of rows would bury them in the terminal.
+"""
 
 from __future__ import annotations
 
 import logging
-import sys
+import threading
 import time
-from typing import ClassVar
+from collections import defaultdict
+from collections.abc import Iterator, Sequence
+from contextlib import contextmanager
+from dataclasses import dataclass
+from datetime import datetime
+from pathlib import Path
+from typing import Any, ClassVar
+
+from rich.console import Console, RenderableType
+from rich.progress import (
+    BarColumn,
+    MofNCompleteColumn,
+    Progress,
+    TextColumn,
+    TimeElapsedColumn,
+    TimeRemainingColumn,
+)
+from rich.table import Table
+from rich.text import Text
+from rich.tree import Tree
 
 import config
 
 logger = logging.getLogger("kb")
+
+# No highlighting: questions and answers are printed as they are.
+console = Console(stderr=True, highlight=False)
 
 
 def format_duration(seconds: float) -> str:
@@ -22,151 +51,202 @@ def format_duration(seconds: float) -> str:
     return f"{total}s"
 
 
-class ProgressBar:
-    """A single-line progress bar with named counters and an ETA.
+# ----- Progress ------------------------------------------------------------
 
-    Renders to stderr while it is a terminal; otherwise falls back to periodic
-    log lines, so redirected output stays readable. Only one bar is active at a
-    time — the logging handler uses it to keep log lines from breaking the bar.
+
+class ProgressBar:
+    """A bar at the bottom of the terminal: done/total, time spent and left, counters.
+
+    print puts a line above the bar, where it stays; the bar moves on. One bar
+    at a time: the steps run one after another.
     """
 
-    WIDTH = 24
-    FALLBACK_STEP_PERCENT = 10
-
+    # The running bar, stopped by run() when a step fails or is interrupted:
+    # a bar left running keeps the terminal's cursor hidden.
     active: ClassVar[ProgressBar | None] = None
 
     def __init__(self, total: int, label: str) -> None:
-        self.total = max(total, 1)
         self.label = label
-        self.completed = 0
-        self.counters: dict[str, int] = {}
+        self.counters: dict[str, int] = defaultdict(int)
         self.started_at = time.monotonic()
-        self.is_interactive = sys.stderr.isatty()
-        self._last_reported_step = -1
-        self._line_length = 0
-
-        ProgressBar.active = self
-        self._render()
-
-    # ----- Rendering -------------------------------------------------------
-
-    def _counters_text(self) -> str:
-        return ", ".join(f"{name} {count}" for name, count in self.counters.items())
-
-    def _eta_text(self) -> str:
-        elapsed = time.monotonic() - self.started_at
-        if self.completed == 0 or elapsed < 1:
-            return "ETA --"
-        rate = self.completed / elapsed
-        remaining = (self.total - self.completed) / rate if rate else 0
-        return f"{rate:.1f}/s, ETA {format_duration(remaining)}"
-
-    def _render(self) -> None:
-        if not self.is_interactive:
-            return
-        percent = self.completed * 100 // self.total
-        filled = self.completed * self.WIDTH // self.total
-        bar = "█" * filled + "░" * (self.WIDTH - filled)
-
-        parts = [f"{self.label} [{bar}] {self.completed}/{self.total} {percent:3d}%"]
-        counters = self._counters_text()
-        if counters:
-            parts.append(counters)
-        parts.append(self._eta_text())
-
-        line = " | ".join(parts)
-        self._line_length = len(line)
-        sys.stderr.write("\r" + line)
-        sys.stderr.flush()
-
-    def _report_to_log(self) -> None:
-        """Print a progress line when stderr is not a terminal."""
-        percent = self.completed * 100 // self.total
-        step = percent // self.FALLBACK_STEP_PERCENT
-        if step == self._last_reported_step and self.completed != self.total:
-            return
-        self._last_reported_step = step
-
-        counters = self._counters_text()
-        logger.info(
-            "%s: %d/%d (%d%%)%s",
-            self.label,
-            self.completed,
-            self.total,
-            percent,
-            f" | {counters}" if counters else "",
+        self.progress = Progress(
+            TextColumn("{task.description}"),
+            BarColumn(),
+            MofNCompleteColumn(),
+            TimeElapsedColumn(),
+            TextColumn("left"),
+            TimeRemainingColumn(),
+            TextColumn("{task.fields[counters]}", style="dim"),
+            console=console,
+            # Gone when done: finish logs one summary line in its place.
+            transient=True,
         )
+        self.task = self.progress.add_task(label, total=total, counters="")
+        self.progress.start()
+        ProgressBar.active = self
 
-    def clear(self) -> None:
-        """Erase the bar so a log line can be printed over it."""
-        if self.is_interactive and self._line_length:
-            sys.stderr.write("\r" + " " * self._line_length + "\r")
-            sys.stderr.flush()
-
-    def redraw(self) -> None:
-        """Draw the bar again after a log line was printed."""
-        self._render()
-
-    # ----- Updating --------------------------------------------------------
+    def counters_text(self) -> str:
+        return ", ".join(f"{name} {count}" for name, count in self.counters.items())
 
     def advance(self, **counters: int) -> None:
         """Count one finished item, adding the given named counters."""
-        self.completed += 1
         for name, value in counters.items():
-            self.counters[name] = self.counters.get(name, 0) + value
+            self.counters[name] += value
+        self.progress.update(self.task, advance=1, counters=self.counters_text())
 
-        if self.is_interactive:
-            self._render()
-        else:
-            self._report_to_log()
+    def print(self, renderable: RenderableType) -> None:
+        """Print above the bar."""
+        self.progress.console.print(renderable)
 
     def finish(self) -> None:
-        """Close the bar and print the final summary line."""
-        elapsed = time.monotonic() - self.started_at
-        self.clear()
+        """Remove the bar and log one summary line in its place."""
+        self.progress.stop()
         ProgressBar.active = None
-
-        counters = self._counters_text()
+        completed = int(self.progress.tasks[0].completed)
+        counters = self.counters_text()
         logger.info(
             "%s: done, %d items in %s%s",
             self.label,
-            self.completed,
-            format_duration(elapsed),
+            completed,
+            format_duration(time.monotonic() - self.started_at),
             f" | {counters}" if counters else "",
         )
 
 
-class ProgressAwareHandler(logging.StreamHandler):
-    """Stream handler that keeps log lines from breaking an active progress bar."""
+# ----- Model calls ---------------------------------------------------------
+
+
+@dataclass(frozen=True, slots=True)
+class ModelCall:
+    """One attempt of a model call: the step that made it, how long, what came back."""
+
+    caller: str
+    seconds: float
+    # "ok", "429" or "error: <exception class>".
+    result: str
+
+
+# Every attempt of the process, for the summary of the run; and, per thread,
+# the attempts of the item it is processing, for the line of a row that went
+# wrong (recording_calls).
+_calls_lock = threading.Lock()
+_run_calls: list[ModelCall] = []
+_item_calls = threading.local()
+
+
+def note_call(caller: str, started: float, result: str) -> None:
+    """Note one attempt that began at started (time.monotonic())."""
+    call = ModelCall(caller, round(time.monotonic() - started, 1), result)
+    with _calls_lock:
+        _run_calls.append(call)
+    item_calls = getattr(_item_calls, "calls", None)
+    if item_calls is not None:
+        item_calls.append(call)
+
+
+@contextmanager
+def recording_calls() -> Iterator[list[ModelCall]]:
+    """Collect the model calls this thread makes inside the block."""
+    calls: list[ModelCall] = []
+    _item_calls.calls = calls
+    try:
+        yield calls
+    finally:
+        _item_calls.calls = None
+
+
+def speed_style(seconds: float) -> str:
+    """Yellow from config.SLOW_CALL_SECONDS, red from twice that: a slow GigaChat."""
+    if seconds >= 2 * config.SLOW_CALL_SECONDS:
+        return "red"
+    return "yellow" if seconds >= config.SLOW_CALL_SECONDS else "green"
+
+
+def render_item(title: str, reason: str, calls: Sequence[ModelCall], failed: bool) -> Tree:
+    """Draw one item that went wrong: its reason, and under it every model call."""
+    mark = Text("✗ ", style="bold red") if failed else Text("– ", style="yellow")
+    tree = Tree(
+        Text.assemble(mark, (title, "bold"), "  ", (reason, "red" if failed else "yellow"))
+    )
+    width = max((len(call.caller) for call in calls), default=0)
+    for call in calls:
+        tree.add(
+            Text.assemble(
+                (f"{call.caller:<{width}}  ", "cyan"),
+                (f"{call.seconds:>5.1f} s", speed_style(call.seconds)),
+                "  ",
+                (call.result, "" if call.result == "ok" else "red"),
+            )
+        )
+    return tree
+
+
+def describe_pair(first: dict[str, Any], second: dict[str, Any]) -> str:
+    """Name a pair of entries by their questions, cut to fit a line."""
+    return " / ".join(f"«{entry['question'][:60]}»" for entry in (first, second))
+
+
+def print_model_calls(calls: Sequence[ModelCall]) -> None:
+    """Sum the model calls up by step: how many, how many failed or hit 429, how long."""
+    if not calls:
+        return
+    by_caller: dict[str, list[ModelCall]] = defaultdict(list)
+    for call in calls:
+        by_caller[call.caller].append(call)
+    table = Table(title="Model calls by step", title_justify="left")
+    table.add_column("step", style="cyan")
+    for column in ("calls", "failed", "429", "avg s", "max s", "total"):
+        table.add_column(column, justify="right")
+    for caller, caller_calls in sorted(
+        by_caller.items(), key=lambda item: -sum(call.seconds for call in item[1])
+    ):
+        seconds = [call.seconds for call in caller_calls]
+        failed = sum(call.result.startswith("error") for call in caller_calls)
+        rate_limited = sum(call.result == "429" for call in caller_calls)
+        table.add_row(
+            caller,
+            str(len(seconds)),
+            Text(str(failed), style="red" if failed else ""),
+            Text(str(rate_limited), style="yellow" if rate_limited else ""),
+            f"{sum(seconds) / len(seconds):.1f}",
+            Text(f"{max(seconds):.1f}", style=speed_style(max(seconds))),
+            format_duration(sum(seconds)),
+        )
+    console.print()
+    console.print(table)
+
+
+# ----- Logging -------------------------------------------------------------
+
+
+class ConsoleHandler(logging.Handler):
+    """Print through the shared console, so a line never breaks a running bar."""
 
     def emit(self, record: logging.LogRecord) -> None:
-        bar = ProgressBar.active
-        if bar is not None:
-            bar.clear()
-        super().emit(record)
-        if bar is not None:
-            bar.redraw()
+        try:
+            console.print(self.format(record), markup=False)
+        except Exception:
+            self.handleError(record)
 
 
-def configure_logging() -> None:
-    """Set up the single logging format used by every step of the pipeline.
+def configure_logging(log_path: Path) -> None:
+    """Send the progress of the run to the terminal and its warnings to log_path.
 
-    Warnings and errors also go to config.ERROR_LOG, appended across runs: a
-    failed model call scrolls away among thousands of progress lines, and the
-    file is what tells why a row ended up as filter_failed.
+    The terminal gets the INFO lines of this project only: libraries log every
+    HTTP request at INFO. The file gets warnings and errors of every logger,
+    and is created only by the first of them.
     """
-    console_handler = ProgressAwareHandler(sys.stderr)
+    console_handler = ConsoleHandler()
     console_handler.setFormatter(
-        logging.Formatter(
-            fmt="%(asctime)s | %(levelname)-7s | %(message)s",
-            datefmt="%H:%M:%S",
-        )
+        logging.Formatter(fmt="%(asctime)s  %(message)s", datefmt="%H:%M:%S")
     )
+    console_handler.addFilter(lambda record: record.levelno == logging.INFO)
+    console_handler.addFilter(logging.Filter("kb"))
 
-    config.ERROR_LOG.parent.mkdir(parents=True, exist_ok=True)
-    error_handler = logging.FileHandler(config.ERROR_LOG, encoding="utf-8")
-    error_handler.setLevel(logging.WARNING)
-    error_handler.setFormatter(
+    log_path.parent.mkdir(parents=True, exist_ok=True)
+    file_handler = logging.FileHandler(log_path, encoding="utf-8", delay=True)
+    file_handler.setLevel(logging.WARNING)
+    file_handler.setFormatter(
         logging.Formatter(
             fmt="%(asctime)s | %(levelname)-7s | %(module)s | %(message)s",
             datefmt="%Y-%m-%d %H:%M:%S",
@@ -178,8 +258,39 @@ def configure_logging() -> None:
         handler.close()
     root.handlers.clear()
     root.addHandler(console_handler)
-    root.addHandler(error_handler)
+    root.addHandler(file_handler)
     root.setLevel(logging.INFO)
     # The GigaChat library warns on every 429 by itself; call_with_retries
     # already reports the pause, once for all workers.
     logging.getLogger("gigachat").setLevel(logging.ERROR)
+
+
+@contextmanager
+def run(log_dir: Path, command: str) -> Iterator[None]:
+    """Log a run to <log_dir>/<command>_<YYYY-MM-DD_HH-MM-SS>.log and sum it up.
+
+    The summary — model calls by step, and where the log file is — is printed
+    when the run ends, interrupted or failed too; a crash goes to the file.
+    """
+    log_path = log_dir / f"{command}_{datetime.now():%Y-%m-%d_%H-%M-%S}.log"
+    configure_logging(log_path)
+    try:
+        yield
+    except KeyboardInterrupt:
+        logger.info("Interrupted: run the same command again to resume")
+        raise
+    except Exception:
+        # The traceback goes to the log file too: the terminal scrolls away.
+        logger.exception("Run failed")
+        raise
+    finally:
+        if ProgressBar.active is not None:
+            ProgressBar.active.progress.stop()
+            ProgressBar.active = None
+        with _calls_lock:
+            calls = list(_run_calls)
+        print_model_calls(calls)
+        if log_path.exists():
+            logger.info("Warnings and errors of this run: %s", log_path)
+        else:
+            logger.info("No warnings or errors in this run")

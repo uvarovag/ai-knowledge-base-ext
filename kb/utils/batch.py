@@ -20,7 +20,7 @@ from typing import Any
 import config
 from kb.utils import gigachat, storage
 from kb.utils.excel import SourcePair
-from kb.utils.logs import ProgressBar, logger
+from kb.utils.logs import ModelCall, ProgressBar, logger, recording_calls, render_item
 
 
 @dataclass(slots=True)
@@ -37,6 +37,19 @@ class Outcome:
 
 
 Worker = Callable[[Any, SourcePair], Outcome]
+
+
+def run_worker(
+    worker: Worker, llm: Any, pair: SourcePair
+) -> tuple[Outcome, list[ModelCall]]:
+    """Run the worker on one row, with the model calls it made."""
+    with recording_calls() as calls:
+        try:
+            outcome = worker(llm, pair)
+        except Exception:
+            logger.exception("Row %d: unhandled error", pair.row_number)
+            outcome = Outcome(reason="unhandled_error")
+    return outcome, calls
 
 
 def is_failure(reason: str) -> bool:
@@ -73,7 +86,8 @@ def process_rows(
 
     The worker gets a shared chat client, with max_tokens of output, and one
     row. Results are saved every config.SAVE_EVERY rows and at the end, sorted
-    by source row.
+    by source row. A row left out is printed above the progress bar with its
+    model calls.
     """
     if config.FORCE_REPROCESS:
         entries: list[dict[str, Any]] = []
@@ -108,14 +122,12 @@ def process_rows(
         # Only the workers run in parallel; every result is folded in here, on
         # the main thread, so the lists need no lock.
         with ThreadPoolExecutor(max_workers=config.WORKER_COUNT) as executor:
-            futures = {executor.submit(worker, llm, pair): pair for pair in pending}
+            futures = {
+                executor.submit(run_worker, worker, llm, pair): pair for pair in pending
+            }
             for future in as_completed(futures):
                 pair = futures[future]
-                try:
-                    outcome = future.result()
-                except Exception as error:
-                    logger.error("Row %d: unhandled error: %s", pair.row_number, error)
-                    outcome = Outcome(reason="unhandled_error")
+                outcome, calls = future.result()
 
                 if outcome.entry is not None:
                     entries.append(outcome.entry)
@@ -133,7 +145,13 @@ def process_rows(
                         record["model_question"] = outcome.model_fields.get("question")
                         record["model_answer"] = outcome.model_fields.get("answer")
                     rejected.append(record)
-                    bar.advance(rejected=1)
+                    failed = is_failure(record["reason"])
+                    bar.print(
+                        render_item(
+                            f"row {pair.row_number}", record["reason"], calls, failed
+                        )
+                    )
+                    bar.advance(**{"failed" if failed else "rejected": 1})
 
                 completed += 1
                 if completed % config.SAVE_EVERY == 0:

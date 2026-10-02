@@ -404,6 +404,7 @@ def check_pair(
         ),
         schema=DuplicateVerdict,
         label=f"pair {first}/{second}",
+        caller="duplicate check",
     )
     return pair, verdict
 
@@ -467,8 +468,10 @@ def judge_pairs(
         ]
         for future in as_completed(futures):
             pair, verdict = future.result()
+            title = logs.describe_pair(entries[pair[0]], entries[pair[1]])
             if verdict is None:
                 logger.warning("Pair %s: no verdict, keeping both entries", pair)
+                bar.print(logs.render_item(title, "no verdict, both kept", [], True))
                 bar.advance(failed=1)
                 continue
 
@@ -483,6 +486,8 @@ def judge_pairs(
                         pair,
                         verdict.get("reason"),
                     )
+                    reason = f"answers contradict, both kept: {verdict.get('reason')}"
+                    bar.print(logs.render_item(title, reason, [], False))
                     bar.advance(conflicts=1)
                 else:
                     bar.advance(duplicates=1)
@@ -661,6 +666,7 @@ def merge_entries(
             user_prompt + hint,
             schema=entry_schema(domain),
             label=label,
+            caller="merge into list" if as_variants else "merge",
         ),
         link_map,
         label,

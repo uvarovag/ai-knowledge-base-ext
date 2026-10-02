@@ -27,7 +27,7 @@ Two levels, never mixed:
 
 - **`config.py`** — technical settings shared by every run: GigaChat, retries, workers,
   thresholds, word limits, Excel styling, and the technical storage (`DATA_DIR`,
-  `BASES_DIR`, `REPAIRS_DIR`, `EMBEDDINGS_CACHE`, `ERROR_LOG`).
+  `BASES_DIR`, `REPAIRS_DIR`, `EMBEDDINGS_CACHE`, `TOOLS_LOG_DIR`).
 - **A TOML config per run** (`configs/`), the only command-line argument of every script
   (`make <target> CONFIG=...`). It holds only what that script needs, and its files are Excel
   only — people hand in and get back `.xlsx`, JSON is technical state. Read by
@@ -135,8 +135,8 @@ column 79, no `=`, no boxes:
 the runs. Everything else lives in `kb/`:
 
 - **`kb/utils/`** — infrastructure with no knowledge base logic: `settings` (TOML configs),
-  `logs` (logger, `ProgressBar`,
-  `configure_logging`), `storage` (atomic JSON, backups, content hashes, `staging_dir_for`),
+  `logs` (logger, rich `ProgressBar`, model call
+  records, `logs.run`), `storage` (atomic JSON, backups, content hashes, `staging_dir_for`),
   `gigachat` (clients, `invoke_structured`, embeddings, network wait), `prompts`
   (`render_prompt`, the shared `WRITING_STYLE` and `LINKS_RULE` blocks), `links` (link
   placeholders), `entries` (the `Entry` schema, `validate_entry`, provenance, `new_entry` /
@@ -205,7 +205,7 @@ question, answer, and the model's question and answer when the code validation r
 Runs with different configs may go in parallel: staging is per base name, and the files
 several runs share are written through a per-process temporary file (`storage.save_json`,
 `matching.save_embedding_cache`; two runs adding embeddings at once may drop each other's new
-vectors, which only costs re-embedding) or appended (`errors.log`). Two runs on the same base are not supported.
+vectors, which only costs re-embedding) Two runs on the same base are not supported.
 
 ### Guardrails on LLM output
 
@@ -256,9 +256,20 @@ function call — uses one of `MAX_RETRIES` (10) attempts with a growing pause a
 model's raw reply (`describe_reply`); a 429 uses none — every thread of the process waits out one
 shared cooldown that doubles while 429s keep coming (`RATE_LIMIT_*`), so the process backs off as a
 whole; the host dropping is waited out by `wait_for_network`. The cooldown is per process: parallel
-runs share the server's limit, so lower `WORKER_COUNT` when they keep hitting it. The library's own
-429 warnings are silenced in `configure_logging`, the pause is logged once. `logs.configure_logging` also appends every warning and error to
-`data/errors.log`. `gigachat.build_llm(max_tokens)` / `build_embedder` are the only places that
+runs share the server's limit, so lower `WORKER_COUNT` when they keep hitting it. The library's own 429 warnings are silenced, the pause is logged once.
+
+Logging (`kb/utils/logs.py`): every entry point runs inside
+`logs.run(log_dir, command)`. The terminal gets this project's INFO lines (progress of the steps,
+pauses for the network and 429), a rich progress bar per step, and above it every item that went
+wrong — a row rejected or failed, with each of its model calls (step, seconds, `ok` / `429` /
+`error: <class>`; slow ones yellow from `SLOW_CALL_SECONDS`, red from twice that), a pair without a
+verdict or with contradicting answers. Warnings and errors of every logger, a crash's traceback
+included, go to the run's own file `<work dir of the base>/logs/<command>_<time>.log`
+(`config.TOOLS_LOG_DIR` for `inspect` and `models`), created only when something is written. When
+the run ends, failed or interrupted too, it prints the model calls summed up by step and where the
+log file is. `call_with_retries(call, label, caller)` notes every attempt under `caller`
+(`logs.note_call`); `batch.process_rows` collects a row's calls with `logs.recording_calls`. Keep
+per-item problems out of the terminal's INFO: they are printed above the bar or logged as warnings. `gigachat.build_llm(max_tokens)` / `build_embedder` are the only places that
 construct GigaChat clients (merges pass `MERGE_MAX_TOKENS`); `storage.hash_text` / `hash_entry` are
 the content keys of every cache.
 
@@ -268,7 +279,8 @@ the content keys of every cache.
 source of truth of a base), `processed_dumps.json` (ledger of processed dump hashes), `staging/`
 (resumable intermediate state; `staging/<source>/rejected.json` holds the left-out rows with
 reasons), `backups/` (pre-write snapshots of the base); `repairs/<name>/staging/` (scenario 2);
-`embeddings.npz`; `errors.log` (warnings and errors of every run). `output/` — the Excel files
+`logs/` under every base and repair (warnings and errors of each run, one file per run);
+`embeddings.npz`; `logs/` for `inspect` and `models`. `output/` — the Excel files
 of the committed configs. The input files contain real tickets: never commit them or anything
 under `data/` or `output/`. GigaChat mTLS certificates live
 in `.gigachat/` (`client-cert.pem`, `client-cert.key`).

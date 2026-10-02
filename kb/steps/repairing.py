@@ -238,6 +238,7 @@ def run_repair(llm: Any, domain: Domain, pair: SourcePair) -> dict[str, Any] | N
             user_prompt + hint,
             schema=repaired_entry_schema(domain),
             label=label,
+            caller="repair",
         ),
         link_map,
         label,

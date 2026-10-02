@@ -13,10 +13,12 @@ import config
 from kb.utils import gigachat, logs
 
 if __name__ == "__main__":
-    logs.configure_logging()
-    models = gigachat.call_with_retries(gigachat.build_llm().get_models, "List models")
-    if models is None:
-        raise SystemExit(f"Could not list models at {config.GIGACHAT_BASE_URL}")
-    print(f"Models at {config.GIGACHAT_BASE_URL}:")
-    for model in sorted(models.data, key=lambda model: model.id_):
-        print(f"  {model.id_:<40} owned by {model.owned_by}")
+    with logs.run(config.TOOLS_LOG_DIR, "models"):
+        models = gigachat.call_with_retries(
+            gigachat.build_llm().get_models, "List models", "models"
+        )
+        if models is None:
+            raise SystemExit(f"Could not list models at {config.GIGACHAT_BASE_URL}")
+        print(f"Models at {config.GIGACHAT_BASE_URL}:")
+        for model in sorted(models.data, key=lambda model: model.id_):
+            print(f"  {model.id_:<40} owned by {model.owned_by}")

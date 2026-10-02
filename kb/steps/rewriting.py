@@ -186,6 +186,7 @@ def run_transform(llm: Any, domain: Domain, pair: SourcePair) -> dict[str, Any] 
             user_prompt + hint,
             schema=entry_schema(domain),
             label=label,
+            caller="transform",
         ),
         link_map,
         label,

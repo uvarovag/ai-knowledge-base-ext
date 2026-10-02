@@ -71,46 +71,46 @@ def main() -> None:
     repair = settings.load(settings.RepairSettings, parser.parse_args().config)
     source = repair.input
 
-    logs.configure_logging()
-    if not source.path.exists():
-        raise FileNotFoundError(f"Base to repair not found: {source.path}")
-    staging_dir = storage.staging_dir_for(source.path, repair.staging_dir)
-    pairs = excel.read_pairs(
-        source.path, source.question_columns, source.answer_columns, source.extra_columns
-    )
-    logger.info("Found %d rows with a question or an answer", len(pairs))
+    with logs.run(repair.log_dir, "repair-base"):
+        if not source.path.exists():
+            raise SystemExit(f"Base to repair not found: {source.path}")
+        staging_dir = storage.staging_dir_for(source.path, repair.staging_dir)
+        pairs = excel.read_pairs(
+            source.path, source.question_columns, source.answer_columns, source.extra_columns
+        )
+        logger.info("Found %d rows with a question or an answer", len(pairs))
 
-    repaired, rejected = batch.process_rows(
-        pairs,
-        lambda llm, pair: repair_entry(llm, repair.domain, pair, source.path.name),
-        staging_dir / "repaired.json",
-        staging_dir / "rejected.json",
-        f"Repair {source.path.name}",
-        max_tokens=config.REPAIR_MAX_TOKENS,
-    )
+        repaired, rejected = batch.process_rows(
+            pairs,
+            lambda llm, pair: repair_entry(llm, repair.domain, pair, source.path.name),
+            staging_dir / "repaired.json",
+            staging_dir / "rejected.json",
+            f"Repair {source.path.name}",
+            max_tokens=config.REPAIR_MAX_TOKENS,
+        )
 
-    cache_path = staging_dir / "verdicts.json"
-    if config.FORCE_REPROCESS and cache_path.exists():
-        cache_path.unlink()
-    logger.info("Deduplicating %d repaired entries", len(repaired))
-    result = dedup.collapse_duplicates(
-        repair.domain,
-        repaired,
-        matching.find_candidate_pairs(repaired),
-        dedup.VerdictCache(cache_path, repaired),
-        "Repair dedup",
-    )
+        cache_path = staging_dir / "verdicts.json"
+        if config.FORCE_REPROCESS and cache_path.exists():
+            cache_path.unlink()
+        logger.info("Deduplicating %d repaired entries", len(repaired))
+        result = dedup.collapse_duplicates(
+            repair.domain,
+            repaired,
+            matching.find_candidate_pairs(repaired),
+            dedup.VerdictCache(cache_path, repaired),
+            "Repair dedup",
+        )
 
-    excel.write_knowledge_base(result, repair.output_file())
-    excel.write_rejected(rejected, repair.output_file("_rejected"))
-    logger.info(
-        "Repaired base: %d of %d rows kept, %d left out, %d after deduplication",
-        len(repaired),
-        len(pairs),
-        len(rejected),
-        len(result),
-    )
-    logger.info("Results are in %s", repair.output_dir)
+        excel.write_knowledge_base(result, repair.output_file())
+        excel.write_rejected(rejected, repair.output_file("_rejected"))
+        logger.info(
+            "Repaired base: %d of %d rows kept, %d left out, %d after deduplication",
+            len(repaired),
+            len(pairs),
+            len(rejected),
+            len(result),
+        )
+        logger.info("Results are in %s", repair.output_dir)
 
 
 if __name__ == "__main__":

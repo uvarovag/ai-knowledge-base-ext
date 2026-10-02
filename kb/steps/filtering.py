@@ -273,6 +273,7 @@ def run_filter(llm: Any, domain: Domain, pair: SourcePair) -> dict[str, Any] | N
         FILTER_USER_PROMPT.format(question=pair.question, answer=pair.answer),
         schema=FilterVerdict,
         label=f"row {pair.row_number} filter",
+        caller="filter",
     )
 
 

@@ -32,8 +32,10 @@ REPAIRS_DIR = DATA_DIR / "repairs"
 # same text always gets the same vector.
 EMBEDDINGS_CACHE = DATA_DIR / "embeddings.npz"
 
-# Warnings and errors of every run, appended: why a model call failed.
-ERROR_LOG = DATA_DIR / "errors.log"
+# Every run writes its warnings and errors — why a model call failed, with the
+# model's raw reply — to <work dir of the base>/logs/<command>_<time>.log.
+# make inspect and make models, which have no base, write here.
+TOOLS_LOG_DIR = DATA_DIR / "logs"
 
 # ----- Source sheets -------------------------------------------------------
 
@@ -89,6 +91,8 @@ RATE_LIMIT_MAX_WAITS = 30
 LINK_PLACEHOLDER_ATTEMPTS = 3
 RETRY_BACKOFF_SECONDS = 5
 NETWORK_CHECK_INTERVAL_SECONDS = 30
+# A model call this slow is marked yellow in the terminal, twice that red.
+SLOW_CALL_SECONDS = 30
 SAVE_EVERY = 25
 
 # ----- Content limits ------------------------------------------------------

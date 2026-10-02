@@ -16,7 +16,7 @@ from langchain_gigachat.embeddings import GigaChatEmbeddings
 from pydantic import BaseModel
 
 import config
-from kb.utils.logs import logger
+from kb.utils.logs import logger, note_call
 
 # ----- Network availability ------------------------------------------------
 
@@ -39,13 +39,14 @@ def wait_for_network() -> None:
     """Block until the GigaChat host becomes reachable again."""
     if is_network_alive():
         return
-    logger.warning("Network unreachable, waiting for it to come back")
+    # INFO, not a warning: a pause, not a failure, and the terminal shows it.
+    logger.info("Network unreachable, waiting for it to come back")
     waited_seconds = 0
     while not is_network_alive():
         time.sleep(config.NETWORK_CHECK_INTERVAL_SECONDS)
         waited_seconds += config.NETWORK_CHECK_INTERVAL_SECONDS
         if waited_seconds % 300 == 0:
-            logger.warning("Still no network after %d seconds", waited_seconds)
+            logger.info("Still no network after %d seconds", waited_seconds)
     logger.info("Network is back after %d seconds", waited_seconds)
 
 
@@ -99,21 +100,27 @@ def end_rate_limit_streak() -> None:
         _rate_limit_streak = 0
 
 
-def call_with_retries(call: Callable[[], Result], label: str) -> Result | None:
+def call_with_retries(
+    call: Callable[[], Result], label: str, caller: str
+) -> Result | None:
     """Run a GigaChat call, retrying failures; None if they never stop.
 
     A failure uses one of config.MAX_RETRIES attempts, with a growing pause.
     A 429 uses none: it waits out the shared cooldown, up to
-    config.RATE_LIMIT_MAX_WAITS times per call.
+    config.RATE_LIMIT_MAX_WAITS times per call. Every attempt is noted under
+    caller, the step making the call (note_call). The label names the item in
+    the log.
     """
     attempt = 0
     rate_limit_waits = 0
     while True:
         wait_for_network()
         wait_for_cooldown()
+        started = time.monotonic()
         try:
             result = call()
         except RateLimitError as error:
+            note_call(caller, started, "429")
             rate_limit_waits += 1
             if rate_limit_waits > config.RATE_LIMIT_MAX_WAITS:
                 logger.warning(
@@ -124,13 +131,15 @@ def call_with_retries(call: Callable[[], Result], label: str) -> Result | None:
                 return None
             delay = start_cooldown(error)
             if delay is not None:
-                logger.warning(
+                # INFO, not a warning: a pause, not a failure, and the terminal shows it.
+                logger.info(
                     "Rate limited (429) at %s: pausing every call for %.0f s",
                     label,
                     delay,
                 )
             continue
         except Exception as error:
+            note_call(caller, started, f"error: {type(error).__name__}")
             attempt += 1
             logger.warning(
                 "%s: attempt %d/%d failed: %s: %s",
@@ -144,6 +153,7 @@ def call_with_retries(call: Callable[[], Result], label: str) -> Result | None:
                 return None
             time.sleep(config.RETRY_BACKOFF_SECONDS * attempt)
             continue
+        note_call(caller, started, "ok")
         end_rate_limit_streak()
         return result
 
@@ -198,7 +208,7 @@ def embed_texts(embedder: GigaChatEmbeddings, texts: list[str]) -> list[list[flo
             raise ValueError(f"Expected {len(texts)} vectors, got {len(vectors)}")
         return vectors
 
-    vectors = call_with_retries(embed, f"Embeddings batch of {len(texts)}")
+    vectors = call_with_retries(embed, f"Embeddings batch of {len(texts)}", "embeddings")
     if vectors is not None:
         return vectors
     raise RuntimeError(
@@ -224,6 +234,7 @@ def invoke_structured(
     user_prompt: str,
     schema: type[BaseModel],
     label: str,
+    caller: str,
 ) -> dict[str, Any] | None:
     """Call the model and return its answer as a dict of the schema, retrying on failure.
 
@@ -234,7 +245,8 @@ def invoke_structured(
     arguments; a reply that fails validation is retried like a network error,
     a 429 waits out the rate-limit cooldown (call_with_retries).
 
-    Returns None if every attempt fails. The label identifies the item in logs.
+    Returns None if every attempt fails. The label identifies the item in the
+    log, the caller the step in the summary of the run.
     """
     # include_raw keeps the model's reply next to the parsed result, so a
     # failure is logged with what the model actually said.
@@ -253,4 +265,4 @@ def invoke_structured(
             )
         return result["parsed"].model_dump()
 
-    return call_with_retries(invoke, label)
+    return call_with_retries(invoke, label, caller)

@@ -96,6 +96,10 @@ class RunSettings(StrictModel):
     def backup_dir(self) -> Path:
         return self.work_dir / "backups"
 
+    @property
+    def log_dir(self) -> Path:
+        return self.work_dir / "logs"
+
 
 class TicketsSettings(RunSettings):
     """make run: update the base from one dump of tickets."""

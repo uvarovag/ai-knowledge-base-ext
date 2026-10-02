@@ -178,6 +178,7 @@ def check_match(
         ),
         schema=MatchVerdict,
         label=label,
+        caller="match with base",
     )
     if verdict is None:
         logger.warning("%s: no verdict, treating the new entry as new", label)
@@ -229,6 +230,8 @@ def judge_matches(
         for future in as_completed(futures):
             pair, relation = future.result()
             if relation is None:
+                title = logs.describe_pair(new_entries[pair[0]], base_entries[pair[1]])
+                bar.print(logs.render_item(title, "no verdict, added as new", [], True))
                 bar.advance(failed=1)
                 continue
             cache.add(pair, relation)
@@ -324,7 +327,7 @@ def merge_into_base(
     number of updated and the number of added ones.
     """
     if not new_entries:
-        logger.warning("Nothing to merge into the base")
+        logger.info("Nothing to merge into the base")
         return base_entries, 0, 0
 
     logger.info(

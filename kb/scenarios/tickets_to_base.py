@@ -173,25 +173,25 @@ def main() -> None:
     parser.add_argument("config", type=Path, help="TOML config of the base")
     base = settings.load(settings.TicketsSettings, parser.parse_args().config)
 
-    logs.configure_logging()
-    if not base.dump.path.exists():
-        raise FileNotFoundError(f"Dump not found: {base.dump.path}")
+    with logs.run(base.log_dir, "run"):
+        if not base.dump.path.exists():
+            raise SystemExit(f"Dump not found: {base.dump.path}")
 
-    file_hash = storage.hash_file(base.dump.path)
-    if is_processed(base, file_hash) and not config.FORCE_REPROCESS:
-        logger.info(
-            "%s is already in base %s, nothing to process",
-            base.dump.path.name,
-            base.name,
-        )
-    else:
-        process_dump(base, file_hash)
+        file_hash = storage.hash_file(base.dump.path)
+        if is_processed(base, file_hash) and not config.FORCE_REPROCESS:
+            logger.info(
+                "%s is already in base %s, nothing to process",
+                base.dump.path.name,
+                base.name,
+            )
+        else:
+            process_dump(base, file_hash)
 
-    entries_of_base = storage.load_json(base.base_json)
-    if entries_of_base:
-        excel.write_knowledge_base(entries_of_base, base.output_file())
-    else:
-        logger.warning("Knowledge base %s is empty, nothing to export", base.name)
+        entries_of_base = storage.load_json(base.base_json)
+        if entries_of_base:
+            excel.write_knowledge_base(entries_of_base, base.output_file())
+        else:
+            logger.info("Knowledge base %s is empty, nothing to export", base.name)
 
 
 if __name__ == "__main__":

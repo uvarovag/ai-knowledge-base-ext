@@ -47,7 +47,8 @@ def read_pairs(
     """Read the first sheet and return every row with a question or an answer.
 
     A missing question or answer column is an error. A missing extra column
-    only costs traceability, so it is a warning: an older file may lack it.
+    only costs traceability, so it is skipped with a note: an older file may
+    lack it.
     """
     if not path.exists():
         raise FileNotFoundError(f"File not found: {path}")
@@ -63,9 +64,10 @@ def read_pairs(
                 f"Available: {dataframe.columns.tolist()}"
             )
     available_extra = [column for column in extra_columns if column in dataframe.columns]
-    for column in extra_columns:
-        if column not in available_extra:
-            logger.warning("Column '%s' not found in %s, skipped", column, path.name)
+    missing_extra = [column for column in extra_columns if column not in available_extra]
+    if missing_extra:
+        # INFO: a config mismatch for the person at the terminal, not a failure.
+        logger.info("Extra columns not in %s, skipped: %s", path.name, missing_extra)
 
     pairs: list[SourcePair] = []
     for index, row in dataframe.iterrows():

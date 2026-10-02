@@ -101,25 +101,25 @@ def main() -> None:
     parser.add_argument("config", type=Path, help="TOML config of make run or repair-base")
     config_path: Path = parser.parse_args().config
 
-    logs.configure_logging()
-    # A repair config has an [input] table, a dump config a [dump] one; the
-    # clean-up config has no source file to inspect.
-    if "input" in settings.read(config_path):
-        repair = settings.load(settings.RepairSettings, config_path)
-        source = repair.input
+    with logs.run(config.TOOLS_LOG_DIR, "inspect"):
+        # A repair config has an [input] table, a dump config a [dump] one; the
+        # clean-up config has no source file to inspect.
+        if "input" in settings.read(config_path):
+            repair = settings.load(settings.RepairSettings, config_path)
+            source = repair.input
 
-        def chat_check(llm: Any, pair: SourcePair) -> dict[str, Any] | None:
-            return repairing.run_repair(llm, repair.domain, pair)
+            def chat_check(llm: Any, pair: SourcePair) -> dict[str, Any] | None:
+                return repairing.run_repair(llm, repair.domain, pair)
 
-    else:
-        base = settings.load(settings.TicketsSettings, config_path)
-        source = base.dump
+        else:
+            base = settings.load(settings.TicketsSettings, config_path)
+            source = base.dump
 
-        def chat_check(llm: Any, pair: SourcePair) -> dict[str, Any] | None:
-            return filtering.run_filter(llm, base.domain, pair)
+            def chat_check(llm: Any, pair: SourcePair) -> dict[str, Any] | None:
+                return filtering.run_filter(llm, base.domain, pair)
 
-    inspect(source.path)
-    check_models(source, chat_check)
+        inspect(source.path)
+        check_models(source, chat_check)
 
 
 if __name__ == "__main__":

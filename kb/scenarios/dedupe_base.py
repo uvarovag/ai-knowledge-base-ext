@@ -38,53 +38,53 @@ def main() -> None:
     parser.add_argument("config", type=Path, help="TOML config of the clean-up")
     base = settings.load(settings.DedupeSettings, parser.parse_args().config)
 
-    logs.configure_logging()
-    entries = storage.load_json(base.base_json)
-    if not entries:
-        logger.info(
-            "Base %s is empty or missing (%s), nothing to deduplicate",
-            base.name,
-            base.base_json,
+    with logs.run(base.log_dir, "dedupe-base"):
+        entries = storage.load_json(base.base_json)
+        if not entries:
+            logger.info(
+                "Base %s is empty or missing (%s), nothing to deduplicate",
+                base.name,
+                base.base_json,
+            )
+            return
+
+        backup_path = storage.backup_file(base.base_json, base.backup_dir)
+        logger.info("Backed up base to %s", backup_path)
+
+        cache_path = base.staging_dir / "base_dedupe" / "verdicts.json"
+        if config.FORCE_REPROCESS and cache_path.exists():
+            cache_path.unlink()
+
+        logger.info("Deduplicating %d base entries", len(entries))
+        matrix = matching.embed_questions(entries, "Base dedup")
+        by_embedding = matching.collect_embedding_pairs(matrix)
+        trigram_threshold = (
+            config.CANDIDATE_THRESHOLD
+            if matrix is not None
+            else config.TRIGRAM_ONLY_CANDIDATE_THRESHOLD
         )
-        return
+        by_trigram = matching.collect_similar_pairs(
+            entries, "question", trigram_threshold, trigram_threshold
+        )
+        candidates = sorted(by_embedding | by_trigram)
+        logger.info(
+            "Candidates: %d by embeddings, %d by question trigrams (threshold %.2f), "
+            "%d in total",
+            len(by_embedding),
+            len(by_trigram),
+            trigram_threshold,
+            len(candidates),
+        )
 
-    backup_path = storage.backup_file(base.base_json, base.backup_dir)
-    logger.info("Backed up base to %s", backup_path)
-
-    cache_path = base.staging_dir / "base_dedupe" / "verdicts.json"
-    if config.FORCE_REPROCESS and cache_path.exists():
-        cache_path.unlink()
-
-    logger.info("Deduplicating %d base entries", len(entries))
-    matrix = matching.embed_questions(entries, "Base dedup")
-    by_embedding = matching.collect_embedding_pairs(matrix)
-    trigram_threshold = (
-        config.CANDIDATE_THRESHOLD
-        if matrix is not None
-        else config.TRIGRAM_ONLY_CANDIDATE_THRESHOLD
-    )
-    by_trigram = matching.collect_similar_pairs(
-        entries, "question", trigram_threshold, trigram_threshold
-    )
-    candidates = sorted(by_embedding | by_trigram)
-    logger.info(
-        "Candidates: %d by embeddings, %d by question trigrams (threshold %.2f), "
-        "%d in total",
-        len(by_embedding),
-        len(by_trigram),
-        trigram_threshold,
-        len(candidates),
-    )
-
-    result = dedup.collapse_duplicates(
-        base.domain,
-        entries,
-        candidates,
-        dedup.VerdictCache(cache_path, entries),
-        "Base dedup",
-    )
-    storage.save_json(base.base_json, result)
-    excel.write_knowledge_base(result, base.output_file())
+        result = dedup.collapse_duplicates(
+            base.domain,
+            entries,
+            candidates,
+            dedup.VerdictCache(cache_path, entries),
+            "Base dedup",
+        )
+        storage.save_json(base.base_json, result)
+        excel.write_knowledge_base(result, base.output_file())
 
 
 if __name__ == "__main__":
