@@ -57,12 +57,17 @@ def is_failure(reason: str) -> bool:
     return reason.endswith("_failed") or reason == "unhandled_error"
 
 
-def log_summary(accepted: int, rejected: list[dict[str, Any]], total: int) -> None:
+def log_summary(
+    accepted: list[dict[str, Any]], rejected: list[dict[str, Any]], total: int
+) -> None:
     """Print the counters and the breakdown of rejection reasons."""
     failed = sum(is_failure(record["reason"]) for record in rejected)
+    doubtful = sum(bool(entry.get("doubtful")) for entry in accepted)
     logger.info(
-        "Processed: %d accepted, %d rejected, %d failed, out of %d rows",
-        accepted,
+        "Processed: %d accepted (%d of them doubtful), %d rejected, %d failed, "
+        "out of %d rows",
+        len(accepted),
+        doubtful,
         len(rejected) - failed,
         failed,
         total,
@@ -132,7 +137,9 @@ def process_rows(
                 if outcome.entry is not None:
                     entries.append(outcome.entry)
                     private_data_seen += outcome.had_private_data
-                    bar.advance(accepted=1)
+                    bar.advance(
+                        **{"doubtful" if outcome.entry.get("doubtful") else "accepted": 1}
+                    )
                 else:
                     record = {
                         "source_row": pair.row_number,
@@ -159,7 +166,7 @@ def process_rows(
         bar.finish()
     save()
 
-    log_summary(len(entries), rejected, len(pairs))
+    log_summary(entries, rejected, len(pairs))
     if private_data_seen:
         logger.info(
             "  %d accepted answers contained private data before rewriting",

@@ -203,9 +203,14 @@ def new_entry(
     source_file: str,
     source_row: int,
     source_columns: dict[str, str],
+    doubtful: str | None = None,
 ) -> dict[str, Any]:
-    """Build an entry from model output for one source row."""
-    return {
+    """Build an entry from model output for one source row.
+
+    doubtful, the reason a reviewer should look at the entry, is stored only
+    when there is one.
+    """
+    entry = {
         "category": fields["category"],
         "question": fields["question"],
         "answer": fields["answer"],
@@ -214,14 +219,21 @@ def new_entry(
         "source_columns": source_columns,
         "updated_at": storage.today(),
     }
+    if doubtful:
+        entry["doubtful"] = doubtful
+    return entry
 
 
 def merged_entry(
     fields: dict[str, Any], group_entries: list[dict[str, Any]]
 ) -> dict[str, Any]:
-    """Build the entry that replaces several, carrying the provenance of all."""
+    """Build the entry that replaces several, carrying the provenance of all.
+
+    It is doubtful only when every entry it replaces was: a question another
+    ticket asked too, with a confirmed answer, is no longer in doubt.
+    """
     source_file, source_rows = merge_sources(group_entries)
-    return {
+    entry = {
         "category": fields["category"],
         "question": fields["question"],
         "answer": fields["answer"],
@@ -230,3 +242,7 @@ def merged_entry(
         "source_columns": merge_source_columns(group_entries),
         "updated_at": storage.today(),
     }
+    if all(group_entry.get("doubtful") for group_entry in group_entries):
+        reasons = [group_entry["doubtful"] for group_entry in group_entries]
+        entry["doubtful"] = "; ".join(dict.fromkeys(reasons))
+    return entry

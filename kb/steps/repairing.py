@@ -80,13 +80,13 @@ REPAIR_SYSTEM_PROMPT_TEMPLATE = """Ты — редактор базы знани
 
 <<LINKS_RULE>>
 
+<<NUMBERS_RULE>>
+
 <<WRITING_STYLE>>
 
 ЗАПРЕЩЕНО
 - Добавлять факты, шаги, сроки, лимиты и числа, которых нет ни в вопросе, ни
   в ответе.
-- Заменять, дописывать или округлять числа: «26 года» не превращай в
-  «2026 года». Число словами можно записать цифрами: «десять» → «10».
 
 ФОРМАТ ОТВЕТА — вызов функции с такими аргументами:
 {"category": "строка из списка", "question": "строка", "answer": "строка", "reason": "до 10 слов", "complete": true}
@@ -184,6 +184,7 @@ def repair_system_prompt(domain: Domain) -> str:
         max_answer_words=config.REPAIR_MAX_ANSWER_WORDS,
         writing_style=prompts.WRITING_STYLE,
         links_rule=prompts.LINKS_RULE,
+        numbers_rule=prompts.NUMBERS_RULE,
     )
 
 

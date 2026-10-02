@@ -111,7 +111,11 @@ writes a link: GigaChat cannot copy a long percent-encoded one. Before every cal
 and `links.unmask_links` puts the exact source links back; prompt examples show placeholders too.
 A placeholder the model declines («по [ссылке-1]») is still recognised; one it made up is asked
 again with a hint naming the placeholders that exist (`links.ask_with_links`, up to
-`LINK_PLACEHOLDER_ATTEMPTS` calls in all) before the validation rejects the entry.
+`LINK_PLACEHOLDER_ATTEMPTS` calls in all) before the validation rejects the entry. Numbers follow
+the one shared block `prompts.NUMBERS_RULE` (copied as they are; a year not expanded, a number word
+may become digits — what `entries.find_invented_numbers` lets through). Every prompt that writes an
+entry shows the categories with their descriptions (`prompts.format_categories`), and none removes an
+error code or a role number from a question.
 
 ### Comments and docstrings
 
@@ -159,8 +163,13 @@ updates matching entries from earlier ones:
    calls per ticket: a _filter_ (does the pair generalize beyond one ticket — reusable question,
    instructional not one-off, complete) and a _transform_ (rewrite into canonical form with a
    category from `[domain.categories]`; names become roles, a vague question is rebuilt from the
-   answer). A pair failing the filter is written to `rejected.json` with a reason instead of being
-   dropped silently.
+   answer). The model scores the flags; the code decides
+   (`filtering.failed_flags`): a pair failing at most `MAX_DOUBTFUL_FLAGS` (1) is kept as
+   _doubtful_ — the entry stores `doubtful`, the reason for a reviewer (`filtering.doubt_reason`),
+   and its row in the Excel is yellow with the reason in «Почему спорная»; a pair failing more is
+   written to `rejected.json` with the reason (`filter:<flags>`). An entry merged from several
+   (`entries.merged_entry`), or replacing one with the same answer (`merging`), stays doubtful only
+   when every source was: another ticket with the same question confirms it.
 2. **Deduplicate the batch** (`matching`, `dedup`) — `matching` finds _candidate_ pairs cheaply
    from three local signals, united: cosine similarity of GigaChat question embeddings (the only
    signal that sees a paraphrase; `EMBEDDING_BACKEND = "none"` turns it off), trigram/Jaccard

@@ -182,7 +182,7 @@ MERGE_SYSTEM_PROMPT_TEMPLATE = """Ты — редактор базы знани�
 разной полнотой. Сделай из них ровно одну запись.
 
 КАТЕГОРИЯ — ровно одно значение из списка, без изменений написания:
-<<CATEGORY_NAMES>>
+<<CATEGORIES>>
 Выбери ту, что подходит объединённой записи.
 
 ВОПРОС
@@ -190,7 +190,8 @@ MERGE_SYSTEM_PROMPT_TEMPLATE = """Ты — редактор базы знани�
 2. Возьми самую общую формулировку, покрывающую все записи. Если записи
    про разные документы, а решение одно, сформулируй вопрос обобщённо:
    «при подписании документа», а не «при подписании УПД».
-3. Без номеров, ФИО и дат. Не более <<QUESTION_WORDS>> слов.
+3. Без номеров документов, ФИО и дат; код ошибки и номер роли сохрани.
+   Не более <<QUESTION_WORDS>> слов.
 
 ОТВЕТ
 1. Перенеси все содержательные детали из всех записей: шаги, условия,
@@ -206,12 +207,13 @@ MERGE_SYSTEM_PROMPT_TEMPLATE = """Ты — редактор базы знани�
 
 <<LINKS_RULE>>
 
+<<NUMBERS_RULE>>
+
 <<WRITING_STYLE>>
 
 ЗАПРЕЩЕНО
 - Добавлять факты, шаги, условия, сроки, лимиты и числа, которых нет ни в одной
   из исходных записей.
-- Заменять или округлять числа.
 - Писать пояснения о том, что записи были объединены.
 
 ФОРМАТ ОТВЕТА — вызов функции с такими аргументами:
@@ -241,13 +243,14 @@ MERGE_VARIANTS_SYSTEM_PROMPT_TEMPLATE = """Ты — редактор базы з
 Сделай из них ровно одну запись, где перечислены все варианты.
 
 КАТЕГОРИЯ — ровно одно значение из списка, без изменений написания:
-<<CATEGORY_NAMES>>
+<<CATEGORIES>>
 Выбери ту, что подходит объединённой записи.
 
 ВОПРОС
 1. Одно предложение, от лица пользователя, с вопросительным знаком.
 2. Возьми самую общую формулировку, покрывающую все записи.
-3. Без номеров, ФИО и дат. Не более <<QUESTION_WORDS>> слов.
+3. Без номеров документов, ФИО и дат; код ошибки и номер роли сохрани.
+   Не более <<QUESTION_WORDS>> слов.
 
 ОТВЕТ — строго по этой структуре:
 1. Первая строка: одно предложение о том, что вариантов несколько.
@@ -268,6 +271,8 @@ MERGE_VARIANTS_SYSTEM_PROMPT_TEMPLATE = """Ты — редактор базы з
 
 <<LINKS_RULE>>
 
+<<NUMBERS_RULE>>
+
 <<WRITING_STYLE>>
 
 ЗАПРЕЩЕНО
@@ -275,7 +280,6 @@ MERGE_VARIANTS_SYSTEM_PROMPT_TEMPLATE = """Ты — редактор базы з
 - Объединять две записи в один пункт.
 - Выбирать один вариант как главный или писать «скорее всего».
 - Добавлять факты, условия, сроки, лимиты и числа, которых нет в исходных записях.
-- Заменять или округлять числа.
 
 ФОРМАТ ОТВЕТА — вызов функции с такими аргументами:
 {"category": "строка из списка", "question": "строка", "answer": "строка"}
@@ -311,13 +315,14 @@ def merge_system_prompt(domain: Domain, as_variants: bool) -> str:
     return prompts.render_prompt(
         MERGE_VARIANTS_SYSTEM_PROMPT_TEMPLATE if as_variants else MERGE_SYSTEM_PROMPT_TEMPLATE,
         domain=domain.name,
-        category_names=prompts.format_category_names(domain),
+        categories=prompts.format_categories(domain),
         question_words=config.QUESTION_WORDS_TARGET,
         answer_words=(
             config.VARIANTS_ANSWER_WORDS_TARGET if as_variants else config.ANSWER_WORDS_TARGET
         ),
         writing_style=prompts.WRITING_STYLE,
         links_rule=prompts.LINKS_RULE,
+        numbers_rule=prompts.NUMBERS_RULE,
     )
 
 

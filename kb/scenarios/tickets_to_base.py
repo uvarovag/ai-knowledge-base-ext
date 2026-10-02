@@ -45,9 +45,9 @@ def process_ticket(
 
     topic = verdict.get("topic") if isinstance(verdict.get("topic"), str) else None
     had_private_data = verdict.get("no_private_data") is not True
-    flag = filtering.failed_flag(verdict)
-    if flag is not None:
-        return batch.Outcome(reason=f"filter:{flag}", topic=topic)
+    flags = filtering.failed_flags(verdict)
+    if len(flags) > config.MAX_DOUBTFUL_FLAGS:
+        return batch.Outcome(reason=f"filter:{','.join(flags)}", topic=topic)
 
     fields = rewriting.run_transform(llm, domain, pair)
     if fields is None:
@@ -64,7 +64,11 @@ def process_ticket(
 
     return batch.Outcome(
         entry=entries.new_entry(
-            fields, source_file, pair.row_number, pair.source_columns
+            fields,
+            source_file,
+            pair.row_number,
+            pair.source_columns,
+            doubtful=filtering.doubt_reason(flags),
         ),
         topic=topic,
         had_private_data=had_private_data,

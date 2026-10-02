@@ -97,8 +97,12 @@ def write_sheet(
     headers: Sequence[str],
     widths: Sequence[int],
     rows: list[list[Any]],
+    row_fills: Sequence[str | None] = (),
 ) -> None:
-    """Write one formatted sheet: bold filled header, wrapped cells, filter."""
+    """Write one formatted sheet: bold filled header, wrapped cells, filter.
+
+    row_fills gives a fill colour per data row, None for none.
+    """
     workbook = Workbook()
     sheet = workbook.active
     sheet.title = config.SHEET_TITLE
@@ -120,6 +124,10 @@ def write_sheet(
     for sheet_row in sheet.iter_rows(min_row=2):
         for cell in sheet_row:
             cell.alignment = wrapped
+    for sheet_row, color in zip(sheet.iter_rows(min_row=2), row_fills):
+        if color:
+            for cell in sheet_row:
+                cell.fill = PatternFill("solid", fgColor=color)
 
     sheet.freeze_panes = "A2"
     sheet.auto_filter.ref = f"A1:{get_column_letter(len(headers))}{sheet.max_row}"
@@ -135,7 +143,9 @@ def write_knowledge_base(entries: list[dict[str, Any]], path: Path) -> None:
     column the entries hold, in the order first seen, so a reviewer can trace
     an entry back to its tickets. They are taken from the entries, not from a
     config: a base grown from dumps with different columns keeps all of them.
+    A doubtful entry's row is highlighted, its reason in its own column.
     """
+    entries = sorted(entries, key=lambda entry: (entry["category"], entry["question"]))
     extra_columns = list(
         dict.fromkeys(
             column for entry in entries for column in entry.get("source_columns", {})
@@ -146,6 +156,7 @@ def write_knowledge_base(entries: list[dict[str, Any]], path: Path) -> None:
             entry["question"],
             entry["answer"],
             entry["category"],
+            entry.get("doubtful", ""),
             entry.get("source_file", ""),
             config.SOURCE_VALUE_SEPARATOR.join(
                 str(row) for row in entry.get("source_rows", [])
@@ -153,15 +164,19 @@ def write_knowledge_base(entries: list[dict[str, Any]], path: Path) -> None:
             entry.get("updated_at", ""),
             *(entry.get("source_columns", {}).get(column, "") for column in extra_columns),
         ]
-        for entry in sorted(entries, key=lambda entry: (entry["category"], entry["question"]))
+        for entry in entries
     ]
     write_sheet(
         path,
         (*config.HEADERS, *extra_columns),
         (*config.COLUMN_WIDTHS, *(config.EXTRA_COLUMN_WIDTH for _ in extra_columns)),
         rows,
+        [config.DOUBTFUL_FILL_COLOR if entry.get("doubtful") else None for entry in entries],
     )
-    logger.info("Exported %d entries to %s", len(entries), path)
+    doubtful = sum(bool(entry.get("doubtful")) for entry in entries)
+    logger.info(
+        "Exported %d entries, %d of them doubtful, to %s", len(entries), doubtful, path
+    )
 
 
 def write_rejected(records: list[dict[str, Any]], path: Path) -> None:

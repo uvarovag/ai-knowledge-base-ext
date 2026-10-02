@@ -1,6 +1,10 @@
 """Decide whether a question/answer pair from a ticket belongs in a knowledge base.
 
-The filter rejects a pair only for reasons rewriting cannot fix. Private data
+The filter rejects a pair only for reasons rewriting cannot fix, and only a
+clear case: a pair that fails no more than config.MAX_DOUBTFUL_FLAGS of the
+gating flags is kept as doubtful, for a reviewer to decide (doubt_reason).
+The model scores the flags; the code decides, so the prompt stays a plain
+yes/no per flag. Private data
 is not one of them: the rewriting step strips greetings, names, logins and
 document numbers, so losing a good instruction over a polite salutation would
 be the worse error. An answer that sends the user to a named person passes too:
@@ -230,14 +234,15 @@ FILTER_USER_PROMPT = """Оцени пару. Не отвечай на вопро
 Ответ: {answer}
 """
 
-# Flags that gate a pair. no_private_data is collected for statistics but never
+# Flags that gate a pair, with what a failed one means to a reviewer of a
+# doubtful entry. no_private_data is collected for statistics but never
 # rejects: the transform stage strips greetings, names, logins and document
 # numbers anyway, and replaces a named person with their role.
-FILTER_FLAGS: tuple[str, ...] = (
-    "reusable_question",
-    "general_answer",
-    "complete_answer",
-)
+FILTER_FLAGS: dict[str, str] = {
+    "reusable_question": "вопрос может быть разовым",
+    "general_answer": "ответ может быть разовым",
+    "complete_answer": "ответ может быть неполным",
+}
 
 
 class FilterVerdict(BaseModel):
@@ -277,13 +282,15 @@ def run_filter(llm: Any, domain: Domain, pair: SourcePair) -> dict[str, Any] | N
     )
 
 
-def failed_flag(verdict: dict[str, Any]) -> str | None:
-    """Return the first gating flag the pair failed, or None if it passed.
+def failed_flags(verdict: dict[str, Any]) -> list[str]:
+    """Return the gating flags the pair failed.
 
     Anything other than an explicit true fails: a missing or malformed flag
     means the model did not confirm it.
     """
-    for flag in FILTER_FLAGS:
-        if verdict.get(flag) is not True:
-            return flag
-    return None
+    return [flag for flag in FILTER_FLAGS if verdict.get(flag) is not True]
+
+
+def doubt_reason(flags: list[str]) -> str | None:
+    """Tell a reviewer why an entry is doubtful; None for an entry that passed."""
+    return "; ".join(FILTER_FLAGS[flag] for flag in flags) or None

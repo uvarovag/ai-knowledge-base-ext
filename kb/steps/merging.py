@@ -296,6 +296,12 @@ def build_updated_entry(
     """
     new_entry = new_entries[match.new_index]
     if not should_accumulate(match, strategy):
+        # The same answer from another ticket confirms it: the fresh entry is
+        # not in doubt when the one it replaces was not.
+        if match.relation == dedup.RELATION_SAME and not base_entries[
+            match.base_index
+        ].get("doubtful"):
+            return {key: value for key, value in new_entry.items() if key != "doubtful"}
         return new_entry
 
     base_entry = base_entries[match.base_index]

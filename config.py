@@ -95,6 +95,15 @@ NETWORK_CHECK_INTERVAL_SECONDS = 30
 SLOW_CALL_SECONDS = 30
 SAVE_EVERY = 25
 
+# ----- Filter --------------------------------------------------------------
+
+# A ticket is scored on three flags (kb/steps/filtering.py): the question can
+# recur, the answer is a rule for anyone, the answer is complete. A pair
+# failing at most this many is kept as doubtful — highlighted in the Excel of
+# the base with the reason — instead of being dropped; failing more, it is
+# rejected. 0 rejects on any failed flag.
+MAX_DOUBTFUL_FLAGS = 1
+
 # ----- Content limits ------------------------------------------------------
 
 # TARGET values are asked for in the prompts, MAX values reject an entry during
@@ -194,11 +203,12 @@ HEADERS: tuple[str, ...] = (
     "Вопрос",
     "Ответ",
     "Категория",
+    "Почему спорная",
     "Файл источника",
     "Строки источника",
     "Обновлено",
 )
-COLUMN_WIDTHS: tuple[int, ...] = (50, 90, 22, 24, 18, 14)
+COLUMN_WIDTHS: tuple[int, ...] = (50, 90, 22, 30, 24, 18, 14)
 
 # Width used for every extra column of the source.
 EXTRA_COLUMN_WIDTH = 22
@@ -216,6 +226,8 @@ REJECTED_HEADERS: tuple[str, ...] = (
 REJECTED_COLUMN_WIDTHS: tuple[int, ...] = (16, 40, 50, 90, 50, 90)
 
 HEADER_FILL_COLOR = "D9E1F2"
+# Fill of a doubtful entry's row: kept for a reviewer to decide.
+DOUBTFUL_FILL_COLOR = "FFF2CC"
 
 # ----- Base deduplication (make dedupe-base) -------------------------------
 

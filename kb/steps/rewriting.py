@@ -12,7 +12,7 @@ from kb.utils.settings import Domain
 
 # ----- Prompt --------------------------------------------------------------
 
-TRANSFORM_SYSTEM_PROMPT_TEMPLATE = """Ты — редактор базы знаний ассистента службы поддержки <<DOMAIN>>.
+TRANSFORM_SYSTEM_PROMPT_TEMPLATE = """Ты — редактор базы знаний службы поддержки <<DOMAIN>>.
 Ты готовишь одну запись базы знаний.
 Тебе дают вопрос пользователя и ответ поддержки из реальной переписки.
 Перепиши их в канонический вид и выбери категорию.
@@ -79,6 +79,8 @@ TRANSFORM_SYSTEM_PROMPT_TEMPLATE = """Ты — редактор базы зна�
 
 <<LINKS_RULE>>
 
+<<NUMBERS_RULE>>
+
 <<WRITING_STYLE>>
 
 ЗАПРЕЩЕНО
@@ -86,7 +88,6 @@ TRANSFORM_SYSTEM_PROMPT_TEMPLATE = """Ты — редактор базы зна�
   учётной записи, номер заявки, договора, допсоглашения, УПД, акта, счёта,
   ИНН, версию ПО, сумму или дату обращения.
 - Добавлять факты, шаги, условия, сроки, лимиты и числа, которых нет в исходном ответе.
-- Заменять число другим числом или округлять его.
 - Дописывать вежливые фразы и советы от себя.
 - Удлинять короткий ответ. Если в исходном ответе одно предложение — в итоговом
   тоже одно предложение.
@@ -168,6 +169,7 @@ def transform_system_prompt(domain: Domain) -> str:
         answer_words=config.ANSWER_WORDS_TARGET,
         writing_style=prompts.WRITING_STYLE,
         links_rule=prompts.LINKS_RULE,
+        numbers_rule=prompts.NUMBERS_RULE,
     )
 
 

@@ -33,6 +33,14 @@ LINKS_RULE = """ССЫЛКИ
 придумывай."""
 
 
+# Numbers of the source, with what entries.find_invented_numbers lets
+# through: one rule for every prompt that writes an answer.
+NUMBERS_RULE = """ЧИСЛА
+Числа переноси как есть: не заменяй, не округляй и не добавляй новых.
+«26 года» не превращай в «2026 года». Число словами можно записать цифрами:
+«десять» → «10»."""
+
+
 def render_prompt(template: str, **values: str | int) -> str:
     """Substitute <<KEY>> placeholders in a prompt template.
 
@@ -51,7 +59,3 @@ def format_categories(domain: Domain) -> str:
         f"- {name} — {description}" for name, description in domain.categories.items()
     )
 
-
-def format_category_names(domain: Domain) -> str:
-    """Render the category keys of a domain as a comma separated list."""
-    return ", ".join(domain.categories)
