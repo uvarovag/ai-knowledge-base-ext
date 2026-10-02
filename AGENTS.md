@@ -298,5 +298,5 @@ reasons), `backups/` (pre-write snapshots of the base); `repairs/<name>/staging/
 `embeddings.npz`; `logs/` for `inspect` and `models`. `output/` — the Excel files
 of the committed configs. The input files contain real tickets: never commit them or anything
 under `data/` or `output/`. GigaChat mTLS certificates live
-in `.gigachat/`: `glm.pem` / `glm.key` for the chat model (`CERT_FILE`, `KEY_FILE`), `gigachat.pem` /
+in `.certs/`: `glm.pem` / `glm.key` for the chat model (`CERT_FILE`, `KEY_FILE`), `gigachat.pem` /
 `gigachat.key` for the embeddings model (`EMBEDDINGS_CERT_FILE`, `EMBEDDINGS_KEY_FILE`).

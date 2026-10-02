@@ -52,8 +52,8 @@ FIRST_DATA_ROW = 2
 # ----- GigaChat ------------------------------------------------------------
 
 # mTLS certificate of the chat model.
-CERT_FILE = Path.cwd() / ".gigachat" / "glm.pem"
-KEY_FILE = Path.cwd() / ".gigachat" / "glm.key"
+CERT_FILE = Path.cwd() / ".certs" / "glm.pem"
+KEY_FILE = Path.cwd() / ".certs" / "glm.key"
 GIGACHAT_MODEL_NAME = "glm-5.2"
 GIGACHAT_BASE_URL = "https://gigachat-ift.sberdevices.delta.sbrf.ru/v1"
 GIGACHAT_VERIFY_SSL_CERTS = False
@@ -71,8 +71,8 @@ MERGE_MAX_TOKENS = 4000
 GIGACHAT_EMBEDDINGS_MODEL = "EmbeddingsGigaR"
 # Its own mTLS certificate: access to the embeddings model is granted apart
 # from the chat model's.
-EMBEDDINGS_CERT_FILE = Path.cwd() / ".gigachat" / "gigachat.pem"
-EMBEDDINGS_KEY_FILE = Path.cwd() / ".gigachat" / "gigachat.key"
+EMBEDDINGS_CERT_FILE = Path.cwd() / ".certs" / "gigachat.pem"
+EMBEDDINGS_KEY_FILE = Path.cwd() / ".certs" / "gigachat.key"
 
 # ----- Runtime -------------------------------------------------------------
 

@@ -13,7 +13,7 @@ __pycache__/
 *.pem
 *.crt
 *.key
-.gigachat/
+.certs/
 
 # Technical storage of every base and run: JSON, staging, backups, caches
 data/
