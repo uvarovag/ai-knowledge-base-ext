@@ -82,12 +82,20 @@ def export(base: RunSettings, entries: list[dict[str, Any]]) -> None:
 # ----- Ledger --------------------------------------------------------------
 
 
-def is_merged(base: RunSettings, file_hash: str) -> bool:
-    """Tell whether this very file — a dump or a base — is already in the base."""
-    return any(
-        record["hash"] == file_hash
-        for record in storage.load_json(base.processed_dumps_json)
+def ledger_record(base: RunSettings, file_hash: str) -> dict[str, Any] | None:
+    """The ledger record of this very file — a dump or a base — if it is in the base."""
+    return next(
+        (
+            record
+            for record in storage.load_json(base.processed_dumps_json)
+            if record["hash"] == file_hash
+        ),
+        None,
     )
+
+
+def is_merged(base: RunSettings, file_hash: str) -> bool:
+    return ledger_record(base, file_hash) is not None
 
 
 def register(

@@ -174,8 +174,11 @@ the runs. Everything else lives in `kb/`:
 ## Scenario 1: tickets to base (`kb/scenarios/tickets_to_base.py`)
 
 Syncs the base `name` from its newest Excel, merges the dump of `[dump].path` into it — the
-first dump creates the base — unless the dump is already in the base's `processed_dumps.json`
-(matched by file SHA-256), then writes today's Excel. Dumps are fed one run at a time, oldest to freshest — a later dump
+first dump creates the base — unless the dump is already in the base's `processed_dumps.json` (matched by file SHA-256), then
+writes today's Excel. A dump already merged is not skipped while its staging holds rows that
+_failed_ (`batch.is_failure`): `make run` tries those rows again and merges only the entries of
+rows not merged before (`process_dump(already_merged=True)`) — merging the rest again would bring
+back what a reviewer deleted; the ledger record adds the new counts. Dumps are fed one run at a time, oldest to freshest — a later dump
 updates matching entries from earlier ones:
 
 1. **Filter and rewrite** (`filtering`, `rewriting`, run through `batch.process_rows`) — two LLM

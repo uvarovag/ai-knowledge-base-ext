@@ -4,8 +4,9 @@ The TOML config names the base and the dump. The base is the one in
 config.BASES_DIR/<name>/ whatever the dump is called, so the first dump
 creates it and every next one updates it. The newest Excel file of the base,
 with the reviewer's edits, becomes the base first (living_base). A dump
-already in the ledger of the base (matched by file content) is skipped.
-Otherwise:
+already in the ledger of the base (matched by file content) is skipped, but
+for the rows the model failed on last time: they are tried again, and only
+their entries are merged. Otherwise:
 
 1. filter and rewrite every ticket into an entry (filtering, rewriting);
 2. collapse duplicates inside the batch (matching, dedup);
@@ -103,14 +104,45 @@ def extract_entries(
     return extracted
 
 
+def failed_rows(staging_dir: Path) -> list[int]:
+    """Rows of the dump the model never gave a usable reply for."""
+    return [
+        record["source_row"]
+        for record in storage.load_json(staging_dir / "rejected.json")
+        if batch.is_failure(record["reason"])
+    ]
+
+
 def process_dump(
-    base: TicketsSettings, entries_of_base: list[dict[str, Any]], file_hash: str
+    base: TicketsSettings,
+    entries_of_base: list[dict[str, Any]],
+    file_hash: str,
+    already_merged: bool,
 ) -> list[dict[str, Any]]:
-    """Extract, deduplicate and merge the dump, record it in the ledger, return the base."""
+    """Extract, deduplicate and merge the dump, record it in the ledger, return the base.
+
+    For a dump already_merged only the entries of the rows that failed last
+    time go on: the rest is in the base, and merging it again would bring
+    back what a reviewer deleted.
+    """
     staging_dir = storage.staging_dir_for(base.dump.path, base.staging_dir)
     logger.info("=== %s -> base %s ===", base.dump.path.name, base.name)
 
-    extracted = extract_entries(base, staging_dir)
+    merged_rows: set[int] = set()
+    if already_merged:
+        merged_rows = {
+            row
+            for entry in storage.load_json(staging_dir / "extracted.json")
+            for row in entry["source_rows"]
+        }
+    extracted = [
+        entry
+        for entry in extract_entries(base, staging_dir)
+        if not set(entry["source_rows"]) <= merged_rows
+    ]
+    if not extracted:
+        logger.info("No new entries to merge into base %s", base.name)
+        return entries_of_base
 
     cache_path = staging_dir / "verdicts.json"
     if config.FORCE_REPROCESS and cache_path.exists():
@@ -129,6 +161,10 @@ def process_dump(
         base.domain, base.merge_strategy, entries_of_base, deduplicated, staging_dir
     )
     living_base.save(base, merged)
+    earlier = living_base.ledger_record(base, file_hash) if already_merged else None
+    if earlier:
+        updated += earlier["updated"]
+        added += earlier["added"]
     living_base.register(base, base.dump.path, file_hash, updated, added)
     return merged
 
@@ -148,14 +184,28 @@ def main() -> None:
 
         entries_of_base = living_base.sync_from_excel(base)
         file_hash = storage.hash_file(base.dump.path)
-        if living_base.is_merged(base, file_hash) and not config.FORCE_REPROCESS:
+        already_merged = (
+            living_base.is_merged(base, file_hash) and not config.FORCE_REPROCESS
+        )
+        staging_dir = storage.staging_dir_for(base.dump.path, base.staging_dir)
+        retry = failed_rows(staging_dir) if already_merged else []
+        if already_merged and not retry:
             logger.info(
                 "%s is already in base %s, nothing to process",
                 base.dump.path.name,
                 base.name,
             )
         else:
-            entries_of_base = process_dump(base, entries_of_base, file_hash)
+            if retry:
+                logger.info(
+                    "%s is already in base %s: retrying its %d failed rows",
+                    base.dump.path.name,
+                    base.name,
+                    len(retry),
+                )
+            entries_of_base = process_dump(
+                base, entries_of_base, file_hash, already_merged
+            )
         living_base.export(base, entries_of_base)
 
 
