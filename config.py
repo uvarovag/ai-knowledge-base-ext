@@ -59,17 +59,20 @@ KEY_FILE = Path.cwd() / ".certs" / "glm.key"
 GIGACHAT_MODEL_NAME = "glm-5.2"
 GIGACHAT_BASE_URL = "https://gigachat-ift.sberdevices.delta.sbrf.ru/v1"
 GIGACHAT_VERIFY_SSL_CERTS = False
-GIGACHAT_TIMEOUT_SECONDS = 180
+# A reasoning model may think for minutes on a long prompt; the timeout only
+# ever fires on a stuck call, so it costs nothing to keep it generous.
+GIGACHAT_TIMEOUT_SECONDS = 300
 GIGACHAT_TEMPERATURE = 0.0
 GIGACHAT_TOP_P = 0.1
 # Output budget of one reply. A reasoning model (glm-5.x, Qwen3.5) spends it on
 # its thinking too, and a reply cut off by the budget is a broken function
-# call, retried and finally lost: unused budget costs nothing.
-GIGACHAT_MAX_TOKENS = 4000
+# call, retried and finally lost: unused budget costs nothing. A reply cut off
+# shows in the run's log file as finish_reason=length: raise these then.
+GIGACHAT_MAX_TOKENS = 8000
 
 # Output budget of the model when it merges entries: a list of several causes
 # is longer than the chat default above allows.
-MERGE_MAX_TOKENS = 8000
+MERGE_MAX_TOKENS = 16000
 
 # Embeddings model served by the same endpoint. "EmbeddingsGigaR" is the
 # stronger one; fall back to "Embeddings" if the endpoint has no GigaR.
@@ -203,7 +206,7 @@ MAX_CAUSES_PER_ENTRY = 8
 # larger output budget than GIGACHAT_MAX_TOKENS to write them: a reply cut off
 # by the budget is a broken function call, retried and finally lost.
 REPAIR_MAX_ANSWER_WORDS = 500
-REPAIR_MAX_TOKENS = 8000
+REPAIR_MAX_TOKENS = 16000
 
 # ----- Excel export --------------------------------------------------------
 
