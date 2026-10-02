@@ -38,6 +38,8 @@ class Outcome:
 
 Worker = Callable[[Any, SourcePair], Outcome]
 
+BLOCKED_REASON = "blacklist: GigaChat's content filter refused the text"
+
 
 def run_worker(
     worker: Worker, llm: Any, pair: SourcePair
@@ -49,6 +51,14 @@ def run_worker(
         except Exception:
             logger.exception("Row %d: unhandled error", pair.row_number)
             outcome = Outcome(reason="unhandled_error")
+    # A row GigaChat's content filter refused is a verdict, not a failure:
+    # trying it again on the next run would get the same refusal.
+    if (
+        outcome.reason
+        and is_failure(outcome.reason)
+        and any(call.result == "blacklist" for call in calls)
+    ):
+        outcome.reason = BLOCKED_REASON
     return outcome, calls
 
 

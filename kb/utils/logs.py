@@ -187,7 +187,8 @@ def describe_pair(first: dict[str, Any], second: dict[str, Any]) -> str:
 
 
 def print_model_calls(calls: Sequence[ModelCall]) -> None:
-    """Sum the model calls up by step: how many, how many failed or hit 429, how long."""
+    """Sum the model calls up by step: how many failed, hit 429 or the content
+    filter, and how long they took."""
     if not calls:
         return
     by_caller: dict[str, list[ModelCall]] = defaultdict(list)
@@ -195,7 +196,7 @@ def print_model_calls(calls: Sequence[ModelCall]) -> None:
         by_caller[call.caller].append(call)
     table = Table(title="Model calls by step", title_justify="left")
     table.add_column("step", style="cyan")
-    for column in ("calls", "failed", "429", "avg s", "max s", "total"):
+    for column in ("calls", "failed", "429", "blocked", "avg s", "max s", "total"):
         table.add_column(column, justify="right")
     for caller, caller_calls in sorted(
         by_caller.items(), key=lambda item: -sum(call.seconds for call in item[1])
@@ -203,11 +204,13 @@ def print_model_calls(calls: Sequence[ModelCall]) -> None:
         seconds = [call.seconds for call in caller_calls]
         failed = sum(call.result.startswith("error") for call in caller_calls)
         rate_limited = sum(call.result == "429" for call in caller_calls)
+        blocked = sum(call.result == "blacklist" for call in caller_calls)
         table.add_row(
             caller,
             str(len(seconds)),
             Text(str(failed), style="red" if failed else ""),
             Text(str(rate_limited), style="yellow" if rate_limited else ""),
+            Text(str(blocked), style="yellow" if blocked else ""),
             f"{sum(seconds) / len(seconds):.1f}",
             Text(f"{max(seconds):.1f}", style=speed_style(max(seconds))),
             format_duration(sum(seconds)),

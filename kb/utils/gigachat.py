@@ -64,6 +64,28 @@ _rate_limit_streak = 0
 Result = TypeVar("Result")
 
 
+class FinalReply(Exception):
+    """A reply that asking again would not change: no more attempts."""
+
+    # How the attempt is noted (note_call) and what the log says to do.
+    result = "error: final reply"
+    advice = ""
+
+
+class Blocked(FinalReply):
+    """GigaChat's own content filter refused the text (finish_reason=blacklist)."""
+
+    result = "blacklist"
+    advice = "GigaChat's content filter refused the topic"
+
+
+class CutOff(FinalReply):
+    """The output budget ran out before the function call (finish_reason=length)."""
+
+    result = "error: cut off"
+    advice = "the reply hit max_tokens; raise GIGACHAT_MAX_TOKENS and run again"
+
+
 def wait_for_cooldown() -> None:
     """Sleep while a rate-limit cooldown of this process is running."""
     while (delay := _cooldown_until - time.monotonic()) > 0:
@@ -108,9 +130,10 @@ def call_with_retries(
 
     A failure uses one of config.MAX_RETRIES attempts, with a growing pause.
     A 429 uses none: it waits out the shared cooldown, up to
-    config.RATE_LIMIT_MAX_WAITS times per call. Every attempt is noted under
-    caller, the step making the call (note_call). The label names the item in
-    the log.
+    config.RATE_LIMIT_MAX_WAITS times per call. A FinalReply — the content
+    filter, a reply cut off by the budget — ends the call at once: the same
+    request gets the same reply. Every attempt is noted under caller, the
+    step making the call (note_call). The label names the item in the log.
     """
     attempt = 0
     rate_limit_waits = 0
@@ -139,6 +162,10 @@ def call_with_retries(
                     delay,
                 )
             continue
+        except FinalReply as error:
+            note_call(caller, started, error.result)
+            logger.warning("%s: %s, not asked again: %s", label, error.advice, error)
+            return None
         except Exception as error:
             note_call(caller, started, f"error: {type(error).__name__}")
             attempt += 1
@@ -287,6 +314,12 @@ def invoke_structured(
     def invoke() -> dict[str, Any]:
         result = structured_llm.invoke(messages)
         if result["parsed"] is None:
+            metadata = getattr(result["raw"], "response_metadata", {}) or {}
+            finish_reason = metadata.get("finish_reason")
+            if finish_reason == "blacklist":
+                raise Blocked(describe_reply(result["raw"]))
+            if finish_reason == "length":
+                raise CutOff(describe_reply(result["raw"]))
             parsing_error = result["parsing_error"] or "none made"
             raise ValueError(
                 f"no valid function call ({parsing_error}); "
