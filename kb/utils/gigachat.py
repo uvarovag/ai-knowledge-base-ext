@@ -215,11 +215,11 @@ def require_certificates() -> None:
 def build_llm(
     max_tokens: int = config.GIGACHAT_MAX_TOKENS, model: str = config.GIGACHAT_MODEL_NAME
 ) -> GigaChat:
-    """Instantiate the GigaChat client with project defaults.
+    """Instantiate the client of the main chat model with project defaults.
 
     Merging several entries into one needs a bigger output budget than the
-    default, so the merge steps pass config.MERGE_MAX_TOKENS; make models
-    passes another model to measure it.
+    default, so the merge steps pass config.MERGE_MAX_TOKENS; build_judge_llm
+    and make models pass another model.
     """
     require_certificate(config.CERT_FILE, config.KEY_FILE, model)
     return GigaChat(
@@ -234,6 +234,12 @@ def build_llm(
         temperature=config.GIGACHAT_TEMPERATURE,
         max_tokens=max_tokens,
     )
+
+
+def build_judge_llm() -> GigaChat:
+    """Instantiate the client of the judging model: the duplicate checks and
+    the matching against the base, which only compare two entries."""
+    return build_llm(model=config.JUDGE_MODEL_NAME)
 
 
 def build_embedder(model: str = config.GIGACHAT_EMBEDDINGS_MODEL) -> GigaChatEmbeddings:

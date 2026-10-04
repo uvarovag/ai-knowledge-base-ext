@@ -18,7 +18,8 @@ import config
 @contextmanager
 def workers(count: int | None = None) -> Iterator[ThreadPoolExecutor]:
     """A pool of count threads, config.WORKER_COUNT by default, whose queue an
-    exception empties."""
+    exception empties. A step on the judging model passes
+    config.JUDGE_WORKER_COUNT, the embeddings config.EMBEDDING_WORKER_COUNT."""
     with ThreadPoolExecutor(max_workers=count or config.WORKER_COUNT) as executor:
         try:
             yield executor

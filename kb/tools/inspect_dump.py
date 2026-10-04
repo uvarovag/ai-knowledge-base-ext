@@ -4,8 +4,9 @@ Run this when a new file arrives: it lists every sheet and column with a
 sample, so the question and answer columns of the TOML config can be checked
 against the file. It then sends the first pair to the chat model the way the
 scenario of the config does — a filter call for a dump, a repair call for a
-base to repair — and one batch to the embeddings model, so a missing
-certificate or model access shows up here, not hours into a run.
+base to repair — compares it with itself on the judging model, and sends one
+batch to the embeddings model, so a missing certificate or model access
+shows up here, not hours into a run.
 
 Usage:
     make inspect CONFIG=configs/<name>.toml
@@ -21,10 +22,10 @@ from typing import Any
 import pandas as pd
 
 import config
-from kb.steps import filtering, repairing
+from kb.steps import dedup, filtering, repairing
 from kb.utils import excel, gigachat, logs, settings
 from kb.utils.excel import SourcePair
-from kb.utils.settings import Source
+from kb.utils.settings import Domain, Source
 
 ChatCheck = Callable[[Any, SourcePair], dict[str, Any] | None]
 
@@ -57,7 +58,7 @@ def inspect(path: Path) -> None:
         print()
 
 
-def check_models(source: Source, chat_check: ChatCheck) -> None:
+def check_models(source: Source, domain: Domain, chat_check: ChatCheck) -> None:
     """Send the first pair of the source to the chat and embeddings models."""
     print("=== Model check ===")
     certificates = {
@@ -85,12 +86,25 @@ def check_models(source: Source, chat_check: ChatCheck) -> None:
         return
     print(f"  Row {pair.row_number}: {pair.question[:77]!r}")
 
-    if missing["chat"]:
-        print(f"  Chat model {config.GIGACHAT_MODEL_NAME}: skipped, no certificate")
-    elif (reply := chat_check(gigachat.build_llm(), pair)) is None:
-        print(f"  Chat model {config.GIGACHAT_MODEL_NAME}: FAILED, see the log file")
-    else:
-        print(f"  Chat model {config.GIGACHAT_MODEL_NAME}: OK, {reply}")
+    def report(role: str, model: str, check: Callable[[], Any]) -> None:
+        if missing["chat"]:
+            print(f"  {role} {model}: skipped, no certificate")
+        elif (reply := check()) is None:
+            print(f"  {role} {model}: FAILED, see the log file")
+        else:
+            print(f"  {role} {model}: OK, {reply}")
+
+    report(
+        "Chat model",
+        config.GIGACHAT_MODEL_NAME,
+        lambda: chat_check(gigachat.build_llm(), pair),
+    )
+    entry = {"question": pair.question, "answer": pair.answer}
+    report(
+        "Judging model",
+        config.JUDGE_MODEL_NAME,
+        lambda: dedup.check_pair(gigachat.build_judge_llm(), domain, [entry], (0, 0))[1],
+    )
 
     if config.EMBEDDING_BACKEND == "none":
         print('  Embeddings: skipped, EMBEDDING_BACKEND = "none"')
@@ -119,20 +133,20 @@ def main() -> None:
         # clean-up config has no source file to inspect.
         if "input" in settings.read(config_path):
             repair = settings.load(settings.RepairSettings, config_path)
-            source = repair.input
+            source, domain = repair.input, repair.domain
 
             def chat_check(llm: Any, pair: SourcePair) -> dict[str, Any] | None:
                 return repairing.run_repair(llm, repair.domain, pair)
 
         else:
             base = settings.load(settings.TicketsSettings, config_path)
-            source = base.dump
+            source, domain = base.dump, base.domain
 
             def chat_check(llm: Any, pair: SourcePair) -> dict[str, Any] | None:
                 return filtering.run_filter(llm, base.domain, pair)
 
         inspect(source.path)
-        check_models(source, chat_check)
+        check_models(source, domain, chat_check)
 
 
 if __name__ == "__main__":

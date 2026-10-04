@@ -12,6 +12,9 @@ their entries are merged. Otherwise:
 2. collapse duplicates inside the batch (matching, dedup);
 3. merge the batch into the base (merging).
 
+The judging model (config.JUDGE_MODEL_NAME) checks the duplicate pairs and
+matches against the base; everything else is the main model's.
+
 The Excel file written to the output folder is what people review and edit;
 the base JSON follows it. An interrupted run resumes
 from the staging directory of the dump: processed rows are skipped and

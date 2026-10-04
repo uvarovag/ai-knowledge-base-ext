@@ -53,10 +53,18 @@ FIRST_DATA_ROW = 2
 
 # ----- GigaChat ------------------------------------------------------------
 
-# mTLS certificate of the chat model.
+# mTLS certificate of the chat models.
 CERT_FILE = Path.cwd() / ".certs" / "glm.pem"
 KEY_FILE = Path.cwd() / ".certs" / "glm.key"
+# Two chat models of this certificate. The main one filters, rewrites, repairs
+# and merges: the reviewers read what it writes, and a weaker model marked
+# reusable tickets as one-off, so it is the strongest one even though it holds
+# one call at a time. The judging one only compares two entries — duplicates
+# or not, does a new entry update one of the base — which comes in far greater
+# numbers (48 500 duplicate checks for 3 500 rewrites of one dump), so it is
+# one that holds several calls at once.
 GIGACHAT_MODEL_NAME = "glm-5.2"
+JUDGE_MODEL_NAME = "GigaChat-3-Ultra"
 GIGACHAT_BASE_URL = "https://gigachat-ift.sberdevices.delta.sbrf.ru/v1"
 GIGACHAT_VERIFY_SSL_CERTS = False
 # A reasoning model may think for minutes on a long prompt; the timeout only
@@ -84,12 +92,13 @@ EMBEDDINGS_KEY_FILE = Path.cwd() / ".certs" / "gigachat.key"
 
 # ----- Runtime -------------------------------------------------------------
 
-# Calls in flight at once, to the chat model and to the embeddings model (each
-# model has its own limit: make models measures them). One by default: the
-# endpoint's rate limit is shared by every run; raise them for speed while no
-# 429s come.
+# Calls in flight at once, one limit per model: the main model, the judging
+# model, the embeddings model. make models measures what each holds; the limit
+# is shared by every client of the certificate, so stay at or below what it
+# shows. Every step runs on one model, so its pool is that model's limit.
 WORKER_COUNT = 1
-EMBEDDING_WORKER_COUNT = 1
+JUDGE_WORKER_COUNT = 5
+EMBEDDING_WORKER_COUNT = 5
 # Attempts of every GigaChat call, chat and embeddings: a failed call loses a
 # row, while a retry only costs one more call and a wait.
 MAX_RETRIES = 10

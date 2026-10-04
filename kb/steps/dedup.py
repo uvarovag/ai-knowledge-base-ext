@@ -1,20 +1,21 @@
 """Collapse duplicates inside one list of entries.
 
 1. Candidates: found by the matching step and passed in, no model calls.
-2. Adjudication: one model call per candidate pair. Besides deciding whether
-   the two entries answer the same question, the model classifies how their
-   answers relate: same, alternatives or contradiction. Verdicts are cached on
-   disk, so an interrupted run does not pay for them twice.
+2. Adjudication: one call of the judging model per candidate pair. Besides
+   deciding whether the two entries answer the same question, the model
+   classifies how their answers relate: same, alternatives or contradiction.
+   Verdicts are cached on disk, so an interrupted run does not pay for them
+   twice.
 3. Grouping: entries are attached to a representative, and every member of a
    group is confirmed against that representative directly. Duplicate is not a
    transitive relation — A~B and B~C does not make A~C — so a group is never
    built by chaining confirmations together. When an entry is confirmed against
    a member but was never compared to the representative, that missing pair is
    sent to the model instead of being silently dropped.
-4. Merge: a group is rewritten into one entry in two steps, so the result has
-   no repetitions. Entries whose answers say the same thing collapse into one
-   full answer first; if several different answers remain, they become one
-   entry listing the possible causes.
+4. Merge: the main model rewrites a group into one entry in two steps, so
+   the result has no repetitions. Entries whose answers say the same thing
+   collapse into one full answer first; if several different answers remain,
+   they become one entry listing the possible causes.
 
 Nothing is lost when a merge fails. A group of different causes is left as
 separate entries rather than collapsed into one of them; a cluster of
@@ -469,7 +470,7 @@ def judge_pairs(
     # main thread, so the cache needs no lock. It is saved on the way out too,
     # so an interrupted run keeps every verdict received.
     try:
-        with parallel.workers() as executor:
+        with parallel.workers(config.JUDGE_WORKER_COUNT) as executor:
             futures = [
                 executor.submit(check_pair, llm, domain, entries, pair)
                 for pair in pending
@@ -825,7 +826,7 @@ def collapse_duplicates(
     contradiction_count = 0
 
     if candidates:
-        llm = gigachat.build_llm()
+        llm = gigachat.build_judge_llm()
         relations, alternatives_count, contradiction_count = judge_pairs(
             llm, domain, entries, candidates, cache, f"{label}: comparing pairs"
         )

@@ -18,7 +18,8 @@ the old cause stays, the new one lands next to it, and dedupe-base can merge
 them later.
 
 Verdicts are cached in the staging directory of the dump, so an interrupted
-merge does not ask the model about the same pairs again.
+merge does not ask the model about the same pairs again. The judging model
+gives the verdicts, the main model folds the matched entries together.
 """
 
 from __future__ import annotations
@@ -221,13 +222,13 @@ def judge_matches(
     if not pending:
         return confirmed
 
-    llm = gigachat.build_llm()
+    llm = gigachat.build_judge_llm()
     completed = 0
     bar = logs.ProgressBar(len(pending), "Merge: matching against base")
     # The cache is saved on the way out too, so an interrupted run keeps every
     # verdict received.
     try:
-        with parallel.workers() as executor:
+        with parallel.workers(config.JUDGE_WORKER_COUNT) as executor:
             futures = [
                 executor.submit(
                     check_match, llm, domain, new_entries, base_entries, pair
