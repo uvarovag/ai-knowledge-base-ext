@@ -1,8 +1,8 @@
 """List each certificate's models; measure how many calls the configured ones hold.
 
 The chat models and the embeddings model have certificates of their own, and
-each one is granted its own models: run this to check that GIGACHAT_MODEL_NAME,
-JUDGE_MODEL_NAME and GIGACHAT_EMBEDDINGS_MODEL of config are among the models
+each one is granted its own models: run this to check that MODEL_NAME,
+JUDGE_MODEL_NAME and EMBEDDINGS_MODEL_NAME of config are among the models
 of their certificate, and to choose WORKER_COUNT, JUDGE_WORKER_COUNT and
 EMBEDDING_WORKER_COUNT.
 
@@ -129,7 +129,7 @@ def main() -> None:
         print(f"Models at {config.GIGACHAT_BASE_URL}\n", flush=True)
         print_models(
             "Chat",
-            (config.GIGACHAT_MODEL_NAME, config.JUDGE_MODEL_NAME),
+            (config.MODEL_NAME, config.JUDGE_MODEL_NAME),
             (config.CERT_FILE, config.KEY_FILE),
             lambda: gigachat.build_llm().get_models(),
             chat_call,
@@ -138,7 +138,7 @@ def main() -> None:
         # gigachat client, built with the embeddings certificate, does.
         print_models(
             "Embeddings",
-            (config.GIGACHAT_EMBEDDINGS_MODEL,),
+            (config.EMBEDDINGS_MODEL_NAME,),
             (config.EMBEDDINGS_CERT_FILE, config.EMBEDDINGS_KEY_FILE),
             lambda: gigachat.build_embedder()._client.get_models(),
             embeddings_call,

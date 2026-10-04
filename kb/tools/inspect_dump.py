@@ -96,7 +96,7 @@ def check_models(source: Source, domain: Domain, chat_check: ChatCheck) -> None:
 
     report(
         "Chat model",
-        config.GIGACHAT_MODEL_NAME,
+        config.MODEL_NAME,
         lambda: chat_check(gigachat.build_llm(), pair),
     )
     entry = {"question": pair.question, "answer": pair.answer}
@@ -109,15 +109,15 @@ def check_models(source: Source, domain: Domain, chat_check: ChatCheck) -> None:
     if config.EMBEDDING_BACKEND == "none":
         print('  Embeddings: skipped, EMBEDDING_BACKEND = "none"')
     elif missing["embeddings"]:
-        print(f"  Embeddings {config.GIGACHAT_EMBEDDINGS_MODEL}: skipped, no certificate")
+        print(f"  Embeddings {config.EMBEDDINGS_MODEL_NAME}: skipped, no certificate")
     else:
         try:
             vectors = gigachat.embed_texts(gigachat.build_embedder(), [pair.question])
         except RuntimeError as error:
-            print(f"  Embeddings {config.GIGACHAT_EMBEDDINGS_MODEL}: FAILED, {error}")
+            print(f"  Embeddings {config.EMBEDDINGS_MODEL_NAME}: FAILED, {error}")
         else:
             print(
-                f"  Embeddings {config.GIGACHAT_EMBEDDINGS_MODEL}: OK, "
+                f"  Embeddings {config.EMBEDDINGS_MODEL_NAME}: OK, "
                 f"vector of {len(vectors[0])} floats"
             )
     print()

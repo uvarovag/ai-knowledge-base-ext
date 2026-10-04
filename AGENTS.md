@@ -70,7 +70,7 @@ has this project's columns (`excel.read_knowledge_base`); otherwise repair it fi
 make setup          # venv + uv + requirements.txt (PYTHON and SBEROSC_TOKEN from .env, see .env.example)
 source activate.sh  # activate the venv with the same environment as the Makefile
 make inspect CONFIG=...      # check the source file of a config, both certificates, and that the chat and embeddings models answer
-make models                  # list the models of each certificate (chat, embeddings), marking the configured ones, and measure how many calls at once each holds
+make models                  # list the models of each certificate (chat, embeddings) and measure how many calls at once each configured one holds
 make run CONFIG=...          # scenario 1 under caffeinate (network calls die when the Mac sleeps)
 make merge-base CONFIG=...   # merge a good base into a base
 make dedupe-base CONFIG=...  # scenario 1 maintenance: deduplicate a base against itself
@@ -164,8 +164,8 @@ the runs. Everything else lives in `kb/`:
   (the files of a living base: sync from its newest Excel, save with a backup, export, the
   ledger of merged files), `batch` (`process_rows`: resumable parallel row processing into entries and
   rejections), `parallel` (`workers(count)`: the thread pool of every parallel step, `WORKER_COUNT` threads
-  by default, `EMBEDDING_WORKER_COUNT` for the embeddings batches; an exception cancels its
-  queue).
+  by default, `JUDGE_WORKER_COUNT` for the pair checks of the judging model,
+  `EMBEDDING_WORKER_COUNT` for the embeddings batches; an exception cancels its queue).
 - **`kb/steps/`** — one transformation each, on lists of entries, with its prompt and schema:
   `filtering`, `rewriting`, `repairing`, `matching`, `dedup`, `merging`.
 - **`kb/scenarios/`** — entry points that compose the steps: `tickets_to_base`, `merge_base`,
@@ -197,7 +197,7 @@ updates matching entries from earlier ones:
    signal that sees a paraphrase; `EMBEDDING_BACKEND = "none"` turns it off), trigram/Jaccard
    similarity over questions and, separately, over answers (support often pastes the same
    instruction under different reported symptoms) — no LLM call is made for pairs that don't clear
-   this bar. `dedup.collapse_duplicates` has the LLM judge each candidate as `same`,
+   this bar. `dedup.collapse_duplicates` has the judging model judge each candidate as `same`,
    `alternatives` or `contradiction` (never merged, logged). Groups form around a representative
    entry — a pair only joins a group if the LLM confirmed it against the representative itself;
    similarity is **not transitive**. A group is merged in two steps (`dedup.merge_group`): `same`
@@ -303,7 +303,7 @@ categories; `EMBEDDING_CANDIDATE_THRESHOLD` / `EMBEDDING_TOP_K` bound the embedd
 contain literal `{` `}` from JSON examples. Every GigaChat call, chat and embeddings, goes through
 `gigachat.call_with_retries`. A `FinalReply` ends the call at once, since the same request gets the
 same reply: `Blocked` (`finish_reason=blacklist`, GigaChat's own content filter) and `CutOff`
-(`finish_reason=length`, the budget ran out; the log says to raise `GIGACHAT_MAX_TOKENS`).
+(`finish_reason=length`, the budget ran out; the log says to raise `MAX_TOKENS`).
 `batch.run_worker` turns a row failed by `Blocked` into the rejection `batch.BLOCKED_REASON`, never
 retried; a `CutOff` row stays a failure, retried on the next run. Any other failure — a GigaChat
 error, a failed validation, a reply without the function call — uses one of `MAX_RETRIES` (10)
@@ -311,10 +311,15 @@ attempts with a growing pause and is logged with the
 model's raw reply (`describe_reply`); a 429 uses none — every thread of the process waits out one
 shared cooldown that doubles while 429s keep coming (`RATE_LIMIT_*`), so the process backs off as a
 whole; the host dropping is waited out by `wait_for_network`. The cooldown is per process: parallel
-runs share the server's limit. `WORKER_COUNT` (chat calls) and `EMBEDDING_WORKER_COUNT`
-(embeddings batches, `matching.embed_questions`) are 1 by default; `make models` measures how
-many calls at once each model holds (`list_models.probe`: waves of 1 … `PROBE_MAX_CONCURRENCY`
-simultaneous short requests past the retries, stopping at the first 429 or error). The library's own 429 warnings are silenced, the pause is logged once.
+runs share the server's limit. Two chat models on one certificate: `MODEL_NAME` (`build_llm`)
+filters, rewrites, repairs and merges — the filter stays on it because a weaker model marked
+reusable tickets as one-off; `JUDGE_MODEL_NAME` (`build_judge_llm`) only judges pairs, in
+`dedup.judge_pairs` and `merging.judge_matches`, which come in far greater numbers. Calls in flight
+are one limit per model: `WORKER_COUNT`, `JUDGE_WORKER_COUNT`, `EMBEDDING_WORKER_COUNT`
+(embeddings batches, `matching.embed_questions`); every step runs on one model, so its pool is that
+model's limit. `make models` measures what each configured model holds (`list_models.probe`: waves
+of 1 … `PROBE_MAX_CONCURRENCY` simultaneous short requests past the retries, stopping at the first
+429 or error) and only lists the rest. The library's own 429 warnings are silenced, the pause is logged once.
 
 Logging (`kb/utils/logs.py`): every entry point runs inside
 `logs.run(log_dir, command)`. The terminal gets this project's INFO lines (progress of the steps,
@@ -327,7 +332,7 @@ included, go to the run's own file `<work dir of the base>/logs/<command>_<time>
 the run ends, failed or interrupted too, it prints the model calls summed up by step and where the
 log file is. `call_with_retries(call, label, caller)` notes every attempt under `caller`
 (`logs.note_call`); `batch.process_rows` collects a row's calls with `logs.recording_calls`. Keep
-per-item problems out of the terminal's INFO: they are printed above the bar or logged as warnings. `gigachat.build_llm(max_tokens)` / `build_embedder` are the only places that construct GigaChat clients,
+per-item problems out of the terminal's INFO: they are printed above the bar or logged as warnings. `gigachat.build_llm(max_tokens, model)` (`build_judge_llm` for the judging model) / `build_embedder` are the only places that construct GigaChat clients,
 each with its own certificate (`CERT_FILE` / `EMBEDDINGS_CERT_FILE`), and stop with the missing file
 named when it is not there (`require_certificate`) (merges pass `MERGE_MAX_TOKENS`); `storage.hash_text` / `hash_entry` are
 the content keys of every cache.
@@ -342,5 +347,5 @@ reasons), `backups/` (pre-write snapshots of the base); `repairs/<name>/staging/
 `logs/` under every base and repair (warnings and errors of each run, one file per run);
 `embeddings.npz`; `logs/` for `inspect` and `models`. All of it is outside the repository. The
 input files contain real tickets: never commit them, a base, or technical state. GigaChat mTLS certificates live
-in `.certs/`: `glm.pem` / `glm.key` for the chat model (`CERT_FILE`, `KEY_FILE`), `gigachat.pem` /
+in `.certs/`: `glm.pem` / `glm.key` for the chat models (`CERT_FILE`, `KEY_FILE`), `gigachat.pem` /
 `gigachat.key` for the embeddings model (`EMBEDDINGS_CERT_FILE`, `EMBEDDINGS_KEY_FILE`).

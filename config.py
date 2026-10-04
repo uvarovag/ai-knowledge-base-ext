@@ -53,6 +53,9 @@ FIRST_DATA_ROW = 2
 
 # ----- GigaChat ------------------------------------------------------------
 
+# GIGACHAT_* are the settings of the GigaChat API and its client; the models
+# are named by their role in the pipeline.
+
 # mTLS certificate of the chat models.
 CERT_FILE = Path.cwd() / ".certs" / "glm.pem"
 KEY_FILE = Path.cwd() / ".certs" / "glm.key"
@@ -63,7 +66,7 @@ KEY_FILE = Path.cwd() / ".certs" / "glm.key"
 # or not, does a new entry update one of the base — which comes in far greater
 # numbers (48 500 duplicate checks for 3 500 rewrites of one dump), so it is
 # one that holds several calls at once.
-GIGACHAT_MODEL_NAME = "glm-5.2"
+MODEL_NAME = "glm-5.2"
 JUDGE_MODEL_NAME = "GigaChat-3-Ultra"
 GIGACHAT_BASE_URL = "https://gigachat-ift.sberdevices.delta.sbrf.ru/v1"
 GIGACHAT_VERIFY_SSL_CERTS = False
@@ -76,15 +79,16 @@ GIGACHAT_TOP_P = 0.1
 # its thinking too, and a reply cut off by the budget is a broken function
 # call, retried and finally lost: unused budget costs nothing. A reply cut off
 # shows in the run's log file as finish_reason=length: raise these then.
-GIGACHAT_MAX_TOKENS = 8000
+MAX_TOKENS = 8000
 
 # Output budget of the model when it merges entries: a list of several causes
 # is longer than the chat default above allows.
 MERGE_MAX_TOKENS = 16000
 
-# Embeddings model served by the same endpoint. "EmbeddingsGigaR" is the
-# stronger one; fall back to "Embeddings" if the endpoint has no GigaR.
-GIGACHAT_EMBEDDINGS_MODEL = "EmbeddingsGigaR"
+# Embeddings model served by the same endpoint, for the candidate search of
+# the duplicate checks. "EmbeddingsGigaR" is the stronger one; fall back to
+# "Embeddings" if the endpoint has no GigaR.
+EMBEDDINGS_MODEL_NAME = "EmbeddingsGigaR"
 # Its own mTLS certificate: access to the embeddings model is granted apart
 # from the chat model's.
 EMBEDDINGS_CERT_FILE = Path.cwd() / ".certs" / "gigachat.pem"
@@ -215,7 +219,7 @@ MAX_CAUSES_PER_ENTRY = 8
 
 # A base holds long regulatory answers that a repair can shorten only so far,
 # so its answers get a higher ceiling than MAX_ANSWER_WORDS, and the model a
-# larger output budget than GIGACHAT_MAX_TOKENS to write them: a reply cut off
+# larger output budget than MAX_TOKENS to write them: a reply cut off
 # by the budget is a broken function call, retried and finally lost.
 REPAIR_MAX_ANSWER_WORDS = 500
 REPAIR_MAX_TOKENS = 16000

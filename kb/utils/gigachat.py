@@ -83,7 +83,7 @@ class CutOff(FinalReply):
     """The output budget ran out before the function call (finish_reason=length)."""
 
     result = "error: cut off"
-    advice = "the reply hit max_tokens; raise GIGACHAT_MAX_TOKENS and run again"
+    advice = "the reply hit max_tokens; raise MAX_TOKENS and run again"
 
 
 def wait_for_cooldown() -> None:
@@ -203,17 +203,17 @@ def require_certificate(cert_file: Path, key_file: Path, model: str) -> None:
 def require_certificates() -> None:
     """Check both certificates before a run: the embeddings one is needed only
     hours in, at the first deduplication, unless EMBEDDING_BACKEND is "none"."""
-    require_certificate(config.CERT_FILE, config.KEY_FILE, config.GIGACHAT_MODEL_NAME)
+    require_certificate(config.CERT_FILE, config.KEY_FILE, config.MODEL_NAME)
     if config.EMBEDDING_BACKEND != "none":
         require_certificate(
             config.EMBEDDINGS_CERT_FILE,
             config.EMBEDDINGS_KEY_FILE,
-            config.GIGACHAT_EMBEDDINGS_MODEL,
+            config.EMBEDDINGS_MODEL_NAME,
         )
 
 
 def build_llm(
-    max_tokens: int = config.GIGACHAT_MAX_TOKENS, model: str = config.GIGACHAT_MODEL_NAME
+    max_tokens: int = config.MAX_TOKENS, model: str = config.MODEL_NAME
 ) -> GigaChat:
     """Instantiate the client of the main chat model with project defaults.
 
@@ -242,7 +242,7 @@ def build_judge_llm() -> GigaChat:
     return build_llm(model=config.JUDGE_MODEL_NAME)
 
 
-def build_embedder(model: str = config.GIGACHAT_EMBEDDINGS_MODEL) -> GigaChatEmbeddings:
+def build_embedder(model: str = config.EMBEDDINGS_MODEL_NAME) -> GigaChatEmbeddings:
     """Instantiate the embeddings client: the same endpoint, its own certificate."""
     require_certificate(config.EMBEDDINGS_CERT_FILE, config.EMBEDDINGS_KEY_FILE, model)
     return GigaChatEmbeddings(

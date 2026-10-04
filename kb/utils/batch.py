@@ -95,7 +95,7 @@ def process_rows(
     accepted_path: Path,
     rejected_path: Path,
     label: str,
-    max_tokens: int = config.GIGACHAT_MAX_TOKENS,
+    max_tokens: int = config.MAX_TOKENS,
 ) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
     """Run the worker over every row not processed yet; return entries and rejections.
 
