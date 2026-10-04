@@ -69,8 +69,8 @@ has this project's columns (`excel.read_knowledge_base`); otherwise repair it fi
 ```bash
 make setup          # venv + uv + requirements.txt (PYTHON and SBEROSC_TOKEN from .env, see .env.example)
 source activate.sh  # activate the venv with the same environment as the Makefile
-make inspect CONFIG=...      # check the source file of a config, both certificates, and that the chat and embeddings models answer
-make models                  # list the models of each certificate (chat, embeddings) and measure how many calls at once each configured one holds
+make inspect CONFIG=...      # check the source file of a config, both certificates, and that the three models answer
+make models                  # list the models of each certificate (glm, gigachat) and measure how many calls at once each configured one holds
 make run CONFIG=...          # scenario 1 under caffeinate (network calls die when the Mac sleeps)
 make merge-base CONFIG=...   # merge a good base into a base
 make dedupe-base CONFIG=...  # scenario 1 maintenance: deduplicate a base against itself
@@ -311,10 +311,11 @@ attempts with a growing pause and is logged with the
 model's raw reply (`describe_reply`); a 429 uses none — every thread of the process waits out one
 shared cooldown that doubles while 429s keep coming (`RATE_LIMIT_*`), so the process backs off as a
 whole; the host dropping is waited out by `wait_for_network`. The cooldown is per process: parallel
-runs share the server's limit. Two chat models on one certificate: `MODEL_NAME` (`build_llm`)
+runs share the server's limit. Two chat models: `MODEL_NAME` (`build_llm`, the glm certificate)
 filters, rewrites, repairs and merges — the filter stays on it because a weaker model marked
-reusable tickets as one-off; `JUDGE_MODEL_NAME` (`build_judge_llm`) only judges pairs, in
-`dedup.judge_pairs` and `merging.judge_matches`, which come in far greater numbers. Calls in flight
+reusable tickets as one-off; `JUDGE_MODEL_NAME` (`build_judge_llm`, the gigachat certificate,
+which holds more calls at once) only judges pairs, in `dedup.judge_pairs` and
+`merging.judge_matches`, which come in far greater numbers. Calls in flight
 are one limit per model: `WORKER_COUNT`, `JUDGE_WORKER_COUNT`, `EMBEDDING_WORKER_COUNT`
 (embeddings batches, `matching.embed_questions`); every step runs on one model, so its pool is that
 model's limit. `make models` measures what each configured model holds (`list_models.probe`: waves
@@ -332,8 +333,8 @@ included, go to the run's own file `<work dir of the base>/logs/<command>_<time>
 the run ends, failed or interrupted too, it prints the model calls summed up by step and where the
 log file is. `call_with_retries(call, label, caller)` notes every attempt under `caller`
 (`logs.note_call`); `batch.process_rows` collects a row's calls with `logs.recording_calls`. Keep
-per-item problems out of the terminal's INFO: they are printed above the bar or logged as warnings. `gigachat.build_llm(max_tokens, model)` (`build_judge_llm` for the judging model) / `build_embedder` are the only places that construct GigaChat clients,
-each with its own certificate (`CERT_FILE` / `EMBEDDINGS_CERT_FILE`), and stop with the missing file
+per-item problems out of the terminal's INFO: they are printed above the bar or logged as warnings. `gigachat.build_llm(max_tokens, model, certificate)` (`build_judge_llm` for the judging model) / `build_embedder` are the only places that construct GigaChat clients,
+with their certificate (`GLM_CERTIFICATE` / `GIGACHAT_CERTIFICATE`), and stop with the missing file
 named when it is not there (`require_certificate`) (merges pass `MERGE_MAX_TOKENS`); `storage.hash_text` / `hash_entry` are
 the content keys of every cache.
 
@@ -347,5 +348,5 @@ reasons), `backups/` (pre-write snapshots of the base); `repairs/<name>/staging/
 `logs/` under every base and repair (warnings and errors of each run, one file per run);
 `embeddings.npz`; `logs/` for `inspect` and `models`. All of it is outside the repository. The
 input files contain real tickets: never commit them, a base, or technical state. GigaChat mTLS certificates live
-in `.certs/`: `glm.pem` / `glm.key` for the chat models (`CERT_FILE`, `KEY_FILE`), `gigachat.pem` /
-`gigachat.key` for the embeddings model (`EMBEDDINGS_CERT_FILE`, `EMBEDDINGS_KEY_FILE`).
+in `.certs/`: `glm.pem` / `glm.key` for the main model (`GLM_CERTIFICATE`), `gigachat.pem` /
+`gigachat.key` for the judging and the embeddings models (`GIGACHAT_CERTIFICATE`).

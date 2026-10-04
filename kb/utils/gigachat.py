@@ -193,41 +193,45 @@ def missing_files(*paths: Path) -> list[str]:
     return [str(path) for path in paths if not path.is_file()]
 
 
-def require_certificate(cert_file: Path, key_file: Path, model: str) -> None:
+Certificate = tuple[Path, Path]
+
+
+def require_certificate(certificate: Certificate, models: str) -> None:
     """Stop with the missing file named, not with an SSL error at the first call."""
-    missing = missing_files(cert_file, key_file)
+    missing = missing_files(*certificate)
     if missing:
-        raise SystemExit(f"Certificate of {model} not found: {', '.join(missing)}")
+        raise SystemExit(f"Certificate of {models} not found: {', '.join(missing)}")
 
 
 def require_certificates() -> None:
-    """Check both certificates before a run: the embeddings one is needed only
-    hours in, at the first deduplication, unless EMBEDDING_BACKEND is "none"."""
-    require_certificate(config.CERT_FILE, config.KEY_FILE, config.MODEL_NAME)
-    if config.EMBEDDING_BACKEND != "none":
-        require_certificate(
-            config.EMBEDDINGS_CERT_FILE,
-            config.EMBEDDINGS_KEY_FILE,
-            config.EMBEDDINGS_MODEL_NAME,
-        )
+    """Check both certificates before a run, so a missing one stops it now and
+    not at the first call of its model, which may come hours in."""
+    require_certificate(config.GLM_CERTIFICATE, config.MODEL_NAME)
+    require_certificate(
+        config.GIGACHAT_CERTIFICATE,
+        f"{config.JUDGE_MODEL_NAME} and {config.EMBEDDINGS_MODEL_NAME}",
+    )
 
 
 def build_llm(
-    max_tokens: int = config.MAX_TOKENS, model: str = config.MODEL_NAME
+    max_tokens: int = config.MAX_TOKENS,
+    model: str = config.MODEL_NAME,
+    certificate: Certificate = config.GLM_CERTIFICATE,
 ) -> GigaChat:
     """Instantiate the client of the main chat model with project defaults.
 
     Merging several entries into one needs a bigger output budget than the
     default, so the merge steps pass config.MERGE_MAX_TOKENS; build_judge_llm
-    and make models pass another model.
+    and make models pass another model with its certificate.
     """
-    require_certificate(config.CERT_FILE, config.KEY_FILE, model)
+    require_certificate(certificate, model)
+    cert_file, key_file = certificate
     return GigaChat(
         model=model,
         base_url=config.GIGACHAT_BASE_URL,
         verify_ssl_certs=config.GIGACHAT_VERIFY_SSL_CERTS,
-        cert_file=str(config.CERT_FILE),
-        key_file=str(config.KEY_FILE),
+        cert_file=str(cert_file),
+        key_file=str(key_file),
         profanity_check=False,
         timeout=config.GIGACHAT_TIMEOUT_SECONDS,
         top_p=config.GIGACHAT_TOP_P,
@@ -239,18 +243,22 @@ def build_llm(
 def build_judge_llm() -> GigaChat:
     """Instantiate the client of the judging model: the duplicate checks and
     the matching against the base, which only compare two entries."""
-    return build_llm(model=config.JUDGE_MODEL_NAME)
+    return build_llm(
+        model=config.JUDGE_MODEL_NAME, certificate=config.GIGACHAT_CERTIFICATE
+    )
 
 
 def build_embedder(model: str = config.EMBEDDINGS_MODEL_NAME) -> GigaChatEmbeddings:
-    """Instantiate the embeddings client: the same endpoint, its own certificate."""
-    require_certificate(config.EMBEDDINGS_CERT_FILE, config.EMBEDDINGS_KEY_FILE, model)
+    """Instantiate the embeddings client: the same endpoint, the gigachat
+    certificate."""
+    require_certificate(config.GIGACHAT_CERTIFICATE, model)
+    cert_file, key_file = config.GIGACHAT_CERTIFICATE
     return GigaChatEmbeddings(
         model=model,
         base_url=config.GIGACHAT_BASE_URL,
         verify_ssl_certs=config.GIGACHAT_VERIFY_SSL_CERTS,
-        cert_file=str(config.EMBEDDINGS_CERT_FILE),
-        key_file=str(config.EMBEDDINGS_KEY_FILE),
+        cert_file=str(cert_file),
+        key_file=str(key_file),
         timeout=config.GIGACHAT_TIMEOUT_SECONDS,
     )
 

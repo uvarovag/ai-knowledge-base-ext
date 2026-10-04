@@ -56,16 +56,25 @@ FIRST_DATA_ROW = 2
 # GIGACHAT_* are the settings of the GigaChat API and its client; the models
 # are named by their role in the pipeline.
 
-# mTLS certificate of the chat models.
-CERT_FILE = Path.cwd() / ".certs" / "glm.pem"
-KEY_FILE = Path.cwd() / ".certs" / "glm.key"
-# Two chat models of this certificate. The main one filters, rewrites, repairs
-# and merges: the reviewers read what it writes, and a weaker model marked
+# Two mTLS certificates, each granted its own models (make models lists them).
+# The glm one holds the strong third-party models (glm-5.2, Qwen, DeepSeek),
+# one call at a time; the gigachat one the GigaChat chat and embeddings
+# models, several calls at once.
+GLM_CERTIFICATE = (
+    Path.cwd() / ".certs" / "glm.pem",
+    Path.cwd() / ".certs" / "glm.key",
+)
+GIGACHAT_CERTIFICATE = (
+    Path.cwd() / ".certs" / "gigachat.pem",
+    Path.cwd() / ".certs" / "gigachat.key",
+)
+# The main model, on the glm certificate, filters, rewrites, repairs and
+# merges: the reviewers read what it writes, and a weaker model marked
 # reusable tickets as one-off, so it is the strongest one even though it holds
-# one call at a time. The judging one only compares two entries — duplicates
-# or not, does a new entry update one of the base — which comes in far greater
-# numbers (48 500 duplicate checks for 3 500 rewrites of one dump), so it is
-# one that holds several calls at once.
+# one call at a time. The judging model, on the gigachat certificate, only
+# compares two entries — duplicates or not, does a new entry update one of the
+# base — which comes in far greater numbers (48 500 duplicate checks for
+# 3 500 rewrites of one dump), so it is one that holds several calls at once.
 MODEL_NAME = "glm-5.2"
 JUDGE_MODEL_NAME = "GigaChat-3-Ultra"
 GIGACHAT_BASE_URL = "https://gigachat-ift.sberdevices.delta.sbrf.ru/v1"
@@ -85,14 +94,10 @@ MAX_TOKENS = 8000
 # is longer than the chat default above allows.
 MERGE_MAX_TOKENS = 16000
 
-# Embeddings model served by the same endpoint, for the candidate search of
+# Embeddings model, on the gigachat certificate, for the candidate search of
 # the duplicate checks. "EmbeddingsGigaR" is the stronger one; fall back to
 # "Embeddings" if the endpoint has no GigaR.
 EMBEDDINGS_MODEL_NAME = "EmbeddingsGigaR"
-# Its own mTLS certificate: access to the embeddings model is granted apart
-# from the chat model's.
-EMBEDDINGS_CERT_FILE = Path.cwd() / ".certs" / "gigachat.pem"
-EMBEDDINGS_KEY_FILE = Path.cwd() / ".certs" / "gigachat.key"
 
 # ----- Runtime -------------------------------------------------------------
 
@@ -165,7 +170,8 @@ MIN_CHECKED_NUMBER_LENGTH = 1
 # Where question embeddings come from:
 #   "gigachat" — the embeddings model of the GigaChat endpoint;
 #   "none"     — no embeddings: candidates come from trigrams only. Use while
-#                access to the embeddings model is not granted yet.
+#                the embeddings model is not granted yet; the gigachat
+#                certificate is still needed, for the judging model.
 EMBEDDING_BACKEND: Literal["gigachat", "none"] = "gigachat"
 
 # Questions per embeddings request.

@@ -1,10 +1,9 @@
 """List each certificate's models; measure how many calls the configured ones hold.
 
-The chat models and the embeddings model have certificates of their own, and
-each one is granted its own models: run this to check that MODEL_NAME,
-JUDGE_MODEL_NAME and EMBEDDINGS_MODEL_NAME of config are among the models
-of their certificate, and to choose WORKER_COUNT, JUDGE_WORKER_COUNT and
-EMBEDDING_WORKER_COUNT.
+Each certificate is granted its own models: run this to check that MODEL_NAME
+is among the models of the glm certificate, JUDGE_MODEL_NAME and
+EMBEDDINGS_MODEL_NAME among those of the gigachat one, and to choose
+WORKER_COUNT, JUDGE_WORKER_COUNT and EMBEDDING_WORKER_COUNT.
 
 For every configured model it sends 1, 2, … up to PROBE_MAX_CONCURRENCY
 short requests at the same instant, and stops at the first wave that gets a
@@ -23,7 +22,6 @@ import threading
 import time
 from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor
-from pathlib import Path
 from typing import Any
 
 from gigachat.exceptions import RateLimitError
@@ -81,23 +79,25 @@ def probe(model: str, call: Callable[[], Any]) -> str:
     return f"holds {held} at once or more (not tried above)"
 
 
+ProbeCall = Callable[[], Any]
+
+
 def print_models(
-    name: str,
-    configured: tuple[str, ...],
-    certificate: tuple[Path, Path],
-    get_models: Callable[[], Any],
-    make_call: Callable[[str], Callable[[], Any]],
+    certificate: gigachat.Certificate,
+    list_models: Callable[[], Any],
+    configured: dict[str, Callable[[], ProbeCall]],
 ) -> None:
-    """Print the models one certificate is granted, the configured ones marked
-    and measured for how many calls at once they hold."""
-    print(
-        f"{name} certificate {certificate[0].name}, configured {', '.join(configured)}:"
-    )
+    """Print the models one certificate is granted; the configured ones, each
+    with what makes its probe call, are marked and measured for how many calls
+    at once they hold. The call is made only after the certificate is found,
+    since building a client stops on a missing one."""
+    name = certificate[0].name
+    print(f"Certificate {name}, configured {', '.join(configured)}:")
     missing = gigachat.missing_files(*certificate)
     if missing:
         print(f"  certificate not found: {', '.join(missing)}\n")
         return
-    models = gigachat.call_with_retries(get_models, f"List models: {name}", "models")
+    models = gigachat.call_with_retries(list_models, f"List models: {name}", "models")
     if models is None:
         print("  FAILED, see the log file\n")
         return
@@ -105,7 +105,8 @@ def print_models(
     width = max(map(len, names), default=0)
     for entry in names:
         if entry in configured:
-            print(f"  * {entry:<{width}}  {probe(entry, make_call(entry))}", flush=True)
+            measured = probe(entry, configured[entry]())
+            print(f"  * {entry:<{width}}  {measured}", flush=True)
         else:
             print(f"    {entry}", flush=True)
     for model in configured:
@@ -114,12 +115,14 @@ def print_models(
     print()
 
 
-def chat_call(model: str) -> Callable[[], Any]:
-    llm = gigachat.build_llm(max_tokens=PROBE_MAX_TOKENS, model=model)
+def chat_call(model: str, certificate: gigachat.Certificate) -> ProbeCall:
+    llm = gigachat.build_llm(
+        max_tokens=PROBE_MAX_TOKENS, model=model, certificate=certificate
+    )
     return lambda: llm.invoke("Ответь одним словом: готово")
 
 
-def embeddings_call(model: str) -> Callable[[], Any]:
+def embeddings_call(model: str) -> ProbeCall:
     embedder = gigachat.build_embedder(model=model)
     return lambda: embedder.embed_documents(["проверка"])
 
@@ -128,20 +131,25 @@ def main() -> None:
     with logs.run(config.TOOLS_LOG_DIR, "models"):
         print(f"Models at {config.GIGACHAT_BASE_URL}\n", flush=True)
         print_models(
-            "Chat",
-            (config.MODEL_NAME, config.JUDGE_MODEL_NAME),
-            (config.CERT_FILE, config.KEY_FILE),
+            config.GLM_CERTIFICATE,
             lambda: gigachat.build_llm().get_models(),
-            chat_call,
+            {
+                config.MODEL_NAME: lambda: chat_call(
+                    config.MODEL_NAME, config.GLM_CERTIFICATE
+                ),
+            },
         )
-        # The embeddings client has no get_models of its own; its underlying
-        # gigachat client, built with the embeddings certificate, does.
         print_models(
-            "Embeddings",
-            (config.EMBEDDINGS_MODEL_NAME,),
-            (config.EMBEDDINGS_CERT_FILE, config.EMBEDDINGS_KEY_FILE),
-            lambda: gigachat.build_embedder()._client.get_models(),
-            embeddings_call,
+            config.GIGACHAT_CERTIFICATE,
+            lambda: gigachat.build_judge_llm().get_models(),
+            {
+                config.JUDGE_MODEL_NAME: lambda: chat_call(
+                    config.JUDGE_MODEL_NAME, config.GIGACHAT_CERTIFICATE
+                ),
+                config.EMBEDDINGS_MODEL_NAME: lambda: embeddings_call(
+                    config.EMBEDDINGS_MODEL_NAME
+                ),
+            },
         )
 
 

@@ -59,18 +59,18 @@ def inspect(path: Path) -> None:
 
 
 def check_models(source: Source, domain: Domain, chat_check: ChatCheck) -> None:
-    """Send the first pair of the source to the chat and embeddings models."""
+    """Send the first pair of the source to the chat, judging and embeddings models."""
     print("=== Model check ===")
     certificates = {
-        "chat": (config.CERT_FILE, config.KEY_FILE),
-        "embeddings": (config.EMBEDDINGS_CERT_FILE, config.EMBEDDINGS_KEY_FILE),
+        "glm": config.GLM_CERTIFICATE,
+        "gigachat": config.GIGACHAT_CERTIFICATE,
     }
     missing = {
         name: gigachat.missing_files(*files) for name, files in certificates.items()
     }
     for name, (cert_file, _) in certificates.items():
         state = f"MISSING {', '.join(missing[name])}" if missing[name] else "found"
-        print(f"  Certificate of the {name} model {cert_file.name}: {state}")
+        print(f"  Certificate {cert_file.name}: {state}")
     if not gigachat.is_network_alive():
         print(f"  GigaChat host unreachable: {config.GIGACHAT_BASE_URL}")
         print()
@@ -86,8 +86,10 @@ def check_models(source: Source, domain: Domain, chat_check: ChatCheck) -> None:
         return
     print(f"  Row {pair.row_number}: {pair.question[:77]!r}")
 
-    def report(role: str, model: str, check: Callable[[], Any]) -> None:
-        if missing["chat"]:
+    def report(
+        role: str, model: str, missing_files: list[str], check: Callable[[], Any]
+    ) -> None:
+        if missing_files:
             print(f"  {role} {model}: skipped, no certificate")
         elif (reply := check()) is None:
             print(f"  {role} {model}: FAILED, see the log file")
@@ -97,18 +99,20 @@ def check_models(source: Source, domain: Domain, chat_check: ChatCheck) -> None:
     report(
         "Chat model",
         config.MODEL_NAME,
+        missing["glm"],
         lambda: chat_check(gigachat.build_llm(), pair),
     )
     entry = {"question": pair.question, "answer": pair.answer}
     report(
         "Judging model",
         config.JUDGE_MODEL_NAME,
+        missing["gigachat"],
         lambda: dedup.check_pair(gigachat.build_judge_llm(), domain, [entry], (0, 0))[1],
     )
 
     if config.EMBEDDING_BACKEND == "none":
         print('  Embeddings: skipped, EMBEDDING_BACKEND = "none"')
-    elif missing["embeddings"]:
+    elif missing["gigachat"]:
         print(f"  Embeddings {config.EMBEDDINGS_MODEL_NAME}: skipped, no certificate")
     else:
         try:
